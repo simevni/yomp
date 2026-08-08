@@ -73,7 +73,7 @@ com.plocoli.yomp/
 ## 자주 하는 업데이트 방법
 
 - **즐겨찾기 바꾸기(운영 중)**: 앱 홈 우상단 **연필(✏️)** → 추가/삭제. 재빌드 불필요. 기본값 자체를 바꾸려면 `Favorites.kt` 수정.
-  - 검색어 팁: 이름이 흔한 단어와 겹치면(예: "IVE"↔"I've", "Frozen"↔마돈나, "にじ 童謡"↔무서운 곡) `query` 를 더 구체적으로(한글명/작곡가명/"Disney X"/대표 키즈 아티스트명). 일본 동요는 `ケロポンズ` 가 다양+깨끗.
+  - 검색어 팁: 표시 이름이 흔한 단어·다른 곡과 겹치면 `query` 를 더 구체적으로 지정(예: 제목 "Frozen" → query "Disney Frozen" 처럼 "Disney ○○", 또는 작곡가/대표 아티스트명). 비영어권 노래는 원어 표기를 query 로 넣어야 결과가 정확하고, 키워드가 엉뚱하게 걸리면(무섭거나 커버·연주 위주) 더 구체적인 아티스트명으로 바꾼다.
 - **곡 하나 빼기**: 그 곡 **길게 누르기** → 숨기기 (`BlockStore`).
 - **새 기능 추가**: 상태·로직은 `YompViewModel`, 화면은 `ui/YompUi.kt`, 데이터는 `data/`.
 - **App Remote 재생 제어 손보기**: `player/AppRemotePlayer.kt` (play/pause/next/previous/seek/setRepeat 는 `playerApi`).
