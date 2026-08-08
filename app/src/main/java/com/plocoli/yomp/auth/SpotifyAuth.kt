@@ -14,14 +14,14 @@ import okhttp3.Request
 import java.security.MessageDigest
 import java.security.SecureRandom
 
-/** 저장/전달되는 토큰. expiresAt 은 epoch millis. */
+/** The token that gets stored/passed around. expiresAt is in epoch millis. */
 @Serializable
 data class Token(
     val accessToken: String,
     val refreshToken: String?,
     val expiresAt: Long,
 ) {
-    val isExpired: Boolean get() = System.currentTimeMillis() >= expiresAt - 60_000 // 1분 여유
+    val isExpired: Boolean get() = System.currentTimeMillis() >= expiresAt - 60_000 // 1-minute margin
 }
 
 @Serializable
@@ -33,15 +33,15 @@ private data class TokenResponse(
 )
 
 /**
- * Spotify Authorization Code + PKCE 흐름의 순수 로직.
- * (상태 관리는 AuthManager 가, 리다이렉트 수신은 AuthCallbackActivity 가 담당)
+ * Pure logic for the Spotify Authorization Code + PKCE flow.
+ * (AuthManager owns the state; AuthCallbackActivity receives the redirect.)
  */
 object SpotifyAuth {
 
     private const val AUTHORIZE = "https://accounts.spotify.com/authorize"
     private const val TOKEN = "https://accounts.spotify.com/api/token"
 
-    // 재생(App Remote) + 검색/브라우징에 필요한 스코프
+    // Scopes needed for playback (App Remote) plus search/browsing.
     private val SCOPES = listOf(
         "app-remote-control",
         "streaming",
@@ -50,7 +50,7 @@ object SpotifyAuth {
         "user-library-read",
         "playlist-read-private",
     )
-    // 참고: user-library-modify(PUT /me/tracks) 는 2026-02 Spotify 개발 모드에서 폐지(403) → 좋아요는 로컬 저장
+    // Note: user-library-modify (PUT /me/tracks) was deprecated in Spotify development mode as of 2026-02 (403) → likes are stored locally.
 
     private val json = Json { ignoreUnknownKeys = true }
     private val http = OkHttpClient()
@@ -82,7 +82,7 @@ object SpotifyAuth {
             .appendQueryParameter("state", state)
             .build()
 
-    // --- 토큰 교환/갱신 (IO) ---
+    // --- Token exchange/refresh (IO) ---
 
     suspend fun exchangeCode(code: String, verifier: String): Token = withContext(Dispatchers.IO) {
         val body = FormBody.Builder()
@@ -102,7 +102,7 @@ object SpotifyAuth {
             .add("client_id", clientId)
             .build()
         postToken(body).let {
-            // Spotify 가 새 refresh_token 을 안 줄 때가 있어 기존 것 유지
+            // Spotify sometimes omits a new refresh_token, so keep the existing one.
             if (it.refreshToken == null) it.copy(refreshToken = refreshToken) else it
         }
     }
@@ -111,7 +111,7 @@ object SpotifyAuth {
         val req = Request.Builder().url(TOKEN).post(body).build()
         http.newCall(req).execute().use { resp ->
             val text = resp.body?.string().orEmpty()
-            if (!resp.isSuccessful) error("토큰 요청 실패 (${resp.code}): $text")
+            if (!resp.isSuccessful) error("token request failed (${resp.code}): $text")
             val r = json.decodeFromString<TokenResponse>(text)
             return Token(
                 accessToken = r.accessToken,

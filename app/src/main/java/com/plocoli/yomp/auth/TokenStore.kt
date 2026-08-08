@@ -4,7 +4,7 @@ import android.content.Context
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
-/** 토큰을 SharedPreferences 에 JSON 으로 저장. (아이 전용 기기라 단순 저장) */
+/** Stores the token as JSON in SharedPreferences. (Simple storage — it's a dedicated kids' device.) */
 object TokenStore {
     private const val PREFS = "yomp_auth"
     private const val KEY_TOKEN = "token"

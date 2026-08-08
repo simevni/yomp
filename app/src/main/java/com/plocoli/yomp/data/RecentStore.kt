@@ -5,8 +5,10 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /**
- * "최근 들은 노래" 로컬 기록. 곡을 재생하는 순간 바로 맨 앞에 추가 → 홈에 즉시 반영.
- * (Spotify 서버 recently-played 는 반영 딜레이가 있고 앱 복귀 때만 가져와서, 로컬로 즉시 관리)
+ * Local "recently played" history. A track is prepended the moment it starts playing,
+ * so the Home rail updates instantly.
+ * (Spotify's server-side recently-played has a reporting delay and is only fetched on
+ * app resume, so we track it locally for immediacy.)
  */
 object RecentStore {
     private const val PREFS = "yomp_recent"
@@ -22,13 +24,13 @@ object RecentStore {
         return runCatching { json.decodeFromString<List<Track>>(raw) }.getOrDefault(emptyList())
     }
 
-    /** 방금 재생한 곡을 맨 앞에 추가 (중복 제거, 최대 MAX개) */
+    /** Prepends the just-played track (de-duplicated, capped at MAX). */
     fun add(context: Context, track: Track) {
         val list = (listOf(track) + all(context)).distinctBy { it.id }.take(MAX)
         saveAll(context, list)
     }
 
-    /** Spotify 서버 기록 등으로 초기 시드 */
+    /** Initial seed, e.g. from Spotify's server-side history. */
     fun saveAll(context: Context, list: List<Track>) {
         prefs(context).edit().putString(KEY, json.encodeToString(list.take(MAX))).apply()
     }

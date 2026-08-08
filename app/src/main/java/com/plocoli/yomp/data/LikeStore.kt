@@ -5,9 +5,10 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /**
- * 인앱 "좋아요" 로컬 저장소 (SharedPreferences 에 Track 목록 JSON).
- * Spotify 라이브러리 저장(PUT /me/tracks)은 2026-02 개발 모드에서 403(폐지)이라, 기기 로컬로 관리한다.
- * 아이 전용 기기라 로컬 저장이 오히려 자연스럽다.
+ * Local store for in-app "likes" (a JSON list of Tracks in SharedPreferences).
+ * Saving to the Spotify library (PUT /me/tracks) returns 403 in development mode
+ * (deprecated as of 2026-02), so likes are kept on the device instead.
+ * On a dedicated kids' device, local storage is a natural fit anyway.
  */
 object LikeStore {
     private const val PREFS = "yomp_likes"
@@ -24,7 +25,7 @@ object LikeStore {
 
     fun isLiked(context: Context, id: String): Boolean = all(context).any { it.id == id }
 
-    /** 좋아요 토글. 반환값 = 토글 후 좋아요 상태(true=좋아요됨). 최근 좋아요가 앞에 오도록 저장. */
+    /** Toggles a like. Returns the resulting state (true = now liked). Newest likes are stored first. */
     fun toggle(context: Context, track: Track): Boolean {
         val current = all(context).toMutableList()
         val idx = current.indexOfFirst { it.id == track.id }

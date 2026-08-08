@@ -12,14 +12,15 @@ data class NowPlaying(
 enum class RepeatMode { OFF, ALL, ONE }
 
 /**
- * 재생 엔진 추상화. 실제 소리는 Spotify App Remote 구현이 담당한다(태블릿 필요).
- * 지금은 UI/흐름 개발용 무음 스텁(NoopPlayer)만 있음. 오디오 전용 — 영상 개념 없음.
+ * Playback-engine abstraction. Actual audio is handled by the Spotify App Remote
+ * implementation (requires a real device). Audio only — there is no video concept.
+ * NoopPlayer is a silent stub for UI/flow development.
  */
 interface Player {
     val state: StateFlow<NowPlaying?>
     val repeatMode: StateFlow<RepeatMode>
-    val positionMs: StateFlow<Long>   // 현재 재생 위치
-    val durationMs: StateFlow<Long>   // 곡 길이
+    val positionMs: StateFlow<Long>   // current playback position
+    val durationMs: StateFlow<Long>   // track length
     suspend fun play(track: Track)
     fun toggle()
     fun pause()
@@ -30,7 +31,7 @@ interface Player {
     fun release()
 }
 
-/** 소리 없이 상태만 흉내내는 스텁. 에뮬레이터에서 UI 확인용. */
+/** Silent stub that only mimics state. For checking the UI on an emulator. */
 class NoopPlayer : Player {
     private val _state = MutableStateFlow<NowPlaying?>(null)
     override val state: StateFlow<NowPlaying?> = _state
@@ -40,7 +41,7 @@ class NoopPlayer : Player {
 
     override val positionMs: StateFlow<Long> = MutableStateFlow(0L)
     override val durationMs: StateFlow<Long> = MutableStateFlow(0L)
-    override fun seekTo(ms: Long) { /* 스텁 */ }
+    override fun seekTo(ms: Long) { /* stub */ }
 
     override suspend fun play(track: Track) {
         _state.value = NowPlaying(track, isPlaying = true)
@@ -52,8 +53,8 @@ class NoopPlayer : Player {
 
     override fun pause() { _state.value = _state.value?.copy(isPlaying = false) }
 
-    override fun next() { /* 스텁: 큐 없음 */ }
-    override fun previous() { /* 스텁: 큐 없음 */ }
+    override fun next() { /* stub: no queue */ }
+    override fun previous() { /* stub: no queue */ }
 
     override fun cycleRepeat() {
         _repeat.value = when (_repeat.value) {

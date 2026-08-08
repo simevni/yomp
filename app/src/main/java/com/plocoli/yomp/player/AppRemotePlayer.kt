@@ -18,9 +18,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * 실제 재생: 설치된 Spotify 앱에 App Remote 로 연결해 오디오를 제어한다. (오디오 전용 — 영상 경로 없음)
- * 표시(제목/아티스트/아트워크)는 사용자가 탭한 Track(웹 API, https 아트워크)을 그대로 쓰고,
- * 재생/일시정지·반복 상태는 App Remote 의 playerState 구독으로 동기화한다.
+ * Real playback: connects to the installed Spotify app via App Remote and controls audio.
+ * (Audio only — there is no video code path.)
+ * The displayed metadata (title/artist/artwork) comes from the Track the user tapped
+ * (Web API, https artwork); play/pause and repeat state are synced by subscribing to
+ * App Remote's playerState.
  */
 class AppRemotePlayer(private val appContext: Context) : Player {
 
@@ -35,7 +37,7 @@ class AppRemotePlayer(private val appContext: Context) : Player {
     private val _durationMs = MutableStateFlow(0L)
     override val durationMs: StateFlow<Long> = _durationMs.asStateFlow()
 
-    // playerState 이벤트는 자주 안 오므로, 마지막 위치 + 경과시간으로 보간해 매끄럽게 틱.
+    // playerState events are infrequent, so interpolate from the last position + elapsed time for a smooth tick.
     private var lastPos = 0L
     private var lastTickAt = SystemClock.elapsedRealtime()
     private var paused = true
@@ -54,7 +56,7 @@ class AppRemotePlayer(private val appContext: Context) : Player {
         }
     }
 
-    /** 연결 실패 등 사용자에게 보여줄 오류 */
+    /** Errors to surface to the user, e.g. connection failures. */
     var onError: ((String) -> Unit)? = null
 
     private var remote: SpotifyAppRemote? = null
@@ -76,7 +78,7 @@ class AppRemotePlayer(private val appContext: Context) : Player {
                 onReady(spotifyAppRemote)
             }
             override fun onFailure(error: Throwable) {
-                onError?.invoke("Spotify 연결에 실패했어요: ${error.message}")
+                onError?.invoke("Spotify 연결에 실패했어요: ${error.message}")   // user-facing: "Failed to connect to Spotify"
             }
         })
     }
@@ -89,7 +91,7 @@ class AppRemotePlayer(private val appContext: Context) : Player {
                 2 -> RepeatMode.ALL   // context
                 else -> RepeatMode.OFF
             }
-            // 진행바용 위치/길이 동기화 (틱커가 이 값으로 보간)
+            // Sync position/length for the progress bar (the ticker interpolates from these).
             paused = ps.isPaused
             lastPos = ps.playbackPosition
             lastTickAt = SystemClock.elapsedRealtime()
@@ -99,7 +101,7 @@ class AppRemotePlayer(private val appContext: Context) : Player {
     }
 
     override suspend fun play(track: Track) {
-        _state.value = NowPlaying(track, isPlaying = true)   // 표시 즉시 갱신
+        _state.value = NowPlaying(track, isPlaying = true)   // update the display immediately
         ensureConnected { it.playerApi.play(track.uri) }
     }
 

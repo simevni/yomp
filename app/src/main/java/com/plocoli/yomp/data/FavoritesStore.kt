@@ -7,8 +7,9 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /**
- * 즐겨찾기 목록을 기기에 저장 (SharedPreferences). 부모가 앱 안에서 편집 → 재빌드 없이 반영.
- * 저장된 게 없으면 Favorites.items(코드 기본값)로 시드한다.
+ * Persists the favorites list on the device (SharedPreferences). A parent can edit it
+ * in-app, so changes take effect without a rebuild.
+ * If nothing is stored yet, it seeds from Favorites.items (the in-code defaults).
  */
 object FavoritesStore {
     private const val PREFS = "yomp_favorites"
@@ -20,7 +21,7 @@ object FavoritesStore {
 
     fun load(context: Context): List<Fav> {
         val raw = prefs(context).getString(KEY, null)
-            ?: return Favorites.items.also { save(context, it) }   // 최초: 기본값 시드
+            ?: return Favorites.items.also { save(context, it) }   // first run: seed with defaults
         return runCatching { json.decodeFromString<List<Fav>>(raw) }
             .getOrNull()?.takeIf { it.isNotEmpty() }
             ?: Favorites.items

@@ -6,8 +6,8 @@ import androidx.activity.ComponentActivity
 import com.plocoli.yomp.MainActivity
 
 /**
- * yomp://callback 리다이렉트를 받는 투명 액티비티.
- * 코드→토큰 교환을 AuthManager 에 넘기고 즉시 MainActivity 로 복귀한다.
+ * Transparent activity that receives the yomp://callback redirect.
+ * It hands the code→token exchange to AuthManager and returns to MainActivity immediately.
  */
 class AuthCallbackActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {

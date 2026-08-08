@@ -16,10 +16,10 @@ import java.util.UUID
 enum class AuthState { UNKNOWN, UNAUTHENTICATED, AUTHENTICATING, AUTHENTICATED, ERROR }
 
 /**
- * 로그인 상태를 앱 전체에서 하나로 들고 있는 싱글턴.
- * - launchLogin: Custom Tab 으로 Spotify 로그인 페이지 띄움
- * - handleRedirect: yomp://callback 수신 시 코드→토큰 교환
- * - validAccessToken: 만료 시 자동 갱신 후 유효 토큰 반환
+ * Singleton that holds the app-wide login state.
+ * - launchLogin: opens the Spotify login page in a Custom Tab
+ * - handleRedirect: exchanges code→token when yomp://callback arrives
+ * - validAccessToken: returns a valid token, refreshing automatically if expired
  */
 object AuthManager {
 
@@ -58,7 +58,7 @@ object AuthManager {
         CustomTabsIntent.Builder().build().launchUrl(context, url)
     }
 
-    /** AuthCallbackActivity 에서 호출 */
+    /** Called from AuthCallbackActivity. */
     fun handleRedirect(context: Context, uri: Uri) {
         val error = uri.getQueryParameter("error")
         val code = uri.getQueryParameter("code")
@@ -89,7 +89,7 @@ object AuthManager {
         }
     }
 
-    /** 유효한 access token. 만료면 갱신. 실패 시 null. */
+    /** A valid access token. Refreshes if expired. Null on failure. */
     suspend fun validAccessToken(context: Context): String? = refreshMutex.withLock {
         val current = token ?: return null
         if (!current.isExpired) return current.accessToken

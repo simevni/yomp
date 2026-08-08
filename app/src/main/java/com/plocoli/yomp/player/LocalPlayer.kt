@@ -8,8 +8,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * 기기 로컬 오디오 파일 재생 (Spotify App Remote 와 별개).
- * android.media.MediaPlayer 로 단순 재생/일시정지.
+ * Plays local audio files on the device (separate from Spotify App Remote).
+ * Simple play/pause via android.media.MediaPlayer.
  */
 class LocalPlayer(private val context: Context) {
 

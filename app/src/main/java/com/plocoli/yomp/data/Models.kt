@@ -2,7 +2,7 @@ package com.plocoli.yomp.data
 
 import kotlinx.serialization.Serializable
 
-// Spotify Web API 검색 응답 (필요한 필드만; 나머지는 무시)
+// Spotify Web API search response (only the fields we need; the rest are ignored).
 
 @Serializable
 data class SearchResponse(val tracks: TrackPage? = null)
@@ -10,7 +10,7 @@ data class SearchResponse(val tracks: TrackPage? = null)
 @Serializable
 data class TrackPage(val items: List<Track> = emptyList())
 
-/** /me/tracks, /me/player/recently-played 처럼 items[].track 형태의 응답 */
+/** Responses shaped like items[].track, e.g. /me/tracks and /me/player/recently-played. */
 @Serializable
 data class SavedTracksResponse(val items: List<TrackHolder> = emptyList())
 
@@ -26,7 +26,7 @@ data class Track(
     val album: Album? = null,
 ) {
     val artistName: String get() = artists.joinToString(", ") { it.name }
-    /** 큰 썸네일 우선, 없으면 아무 이미지나 */
+    /** Prefer the largest thumbnail; fall back to any available image. */
     val thumbnailUrl: String? get() = album?.images?.firstOrNull()?.url
 }
 

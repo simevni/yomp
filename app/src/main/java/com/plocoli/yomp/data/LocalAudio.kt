@@ -5,7 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.provider.MediaStore
 
-/** 태블릿에 저장된 음원 파일 하나 */
+/** A single audio file stored on the device. */
 data class LocalTrack(
     val id: Long,
     val title: String,
@@ -14,7 +14,7 @@ data class LocalTrack(
     val durationMs: Long,
 )
 
-/** MediaStore 로 기기 내 오디오 파일 목록을 조회 */
+/** Queries the device's audio files via MediaStore. */
 object LocalAudio {
     fun query(context: Context): List<LocalTrack> {
         val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
@@ -38,7 +38,7 @@ object LocalAudio {
                 result.add(
                     LocalTrack(
                         id = id,
-                        title = c.getString(titleCol) ?: "제목 없음",
+                        title = c.getString(titleCol) ?: "제목 없음",   // "Untitled" (shown to user)
                         artist = c.getString(artistCol)?.takeIf { it.isNotBlank() && it != "<unknown>" } ?: "",
                         uri = ContentUris.withAppendedId(collection, id),
                         durationMs = c.getLong(durCol),

@@ -3,8 +3,8 @@ package com.plocoli.yomp.data
 import android.content.Context
 
 /**
- * 부모가 "숨긴" 곡들의 Spotify 트랙 ID 집합 (로컬 저장).
- * 모든 레일/검색/딥다이브에서 이 ID 들은 걸러진다.
+ * Set of Spotify track IDs a parent has "hidden" (stored locally).
+ * These IDs are filtered out of every rail, search, and deep-dive.
  */
 object BlockStore {
     private const val PREFS = "yomp_blocked"

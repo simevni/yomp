@@ -24,24 +24,24 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/** 레일 제목 탭 시 여는 딥다이브 종류 */
+/** Kind of deep-dive opened when a rail title is tapped. */
 sealed interface DeepDive {
-    data class Artist(val query: String) : DeepDive   // 아티스트 검색 페이지네이션
-    data object Recent : DeepDive                      // 최근 들은 노래 더 많이(최대 50)
+    data class Artist(val query: String) : DeepDive   // paginated artist search
+    data object Recent : DeepDive                      // more recently-played (up to 50)
 }
 
-/** 홈 화면의 가로 레일 하나. deepDive!=null 이면 제목 탭 시 딥다이브 가능. */
+/** One horizontal rail on the Home screen. If deepDive != null, tapping the title opens a deep-dive. */
 data class BrowseSection(val title: String, val tracks: List<Track>, val deepDive: DeepDive? = null)
 
 class YompViewModel(app: Application) : AndroidViewModel(app) {
 
     private val api = SpotifyApi { AuthManager.validAccessToken(getApplication()) }
 
-    // 실제 재생: Spotify App Remote (설치된 Spotify 앱 필요). 에뮬레이터엔 Spotify 앱이 없어 연결 실패.
+    // Real playback: Spotify App Remote (requires the installed Spotify app). Emulators have no Spotify app, so connection fails there.
     private val appRemotePlayer = AppRemotePlayer(app)
     private val player: Player = appRemotePlayer
 
-    // 로컬 오디오(기기 저장 파일) — Spotify 와 별개 엔진
+    // Local audio (files on the device) — a separate engine from Spotify.
     private val localPlayer = LocalPlayer(app)
     val localNowPlaying = localPlayer.current
     val localIsPlaying = localPlayer.isPlaying
@@ -66,31 +66,31 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
     var isLoadingHome by mutableStateOf(false)
         private set
 
-    /** 지금 재생 중인 곡의 좋아요 상태 (전체화면 플레이어 하트) */
+    /** Like state of the currently playing track (heart in the full-screen player). */
     var isCurrentLiked by mutableStateOf(false)
         private set
 
-    // 아티스트 딥다이브 (레일 제목 탭 → 그 아티스트 곡 여러 페이지)
-    var artistTitle by mutableStateOf<String?>(null)   // null = 닫힘
+    // Artist deep-dive (tap a rail title → several pages of that artist's tracks).
+    var artistTitle by mutableStateOf<String?>(null)   // null = closed
         private set
     var artistTracks by mutableStateOf<List<Track>>(emptyList())
         private set
     var isLoadingArtist by mutableStateOf(false)
         private set
 
-    // 즐겨찾기 편집 (부모가 앱 안에서 추가/삭제 → 재빌드 없이 반영)
+    // Favorites editing (a parent adds/removes in-app → applied without a rebuild).
     var showFavEditor by mutableStateOf(false)
         private set
     var favEditList by mutableStateOf<List<Fav>>(emptyList())
         private set
 
-    // 곡 숨기기 (길게 눌러 이 곡 숨김 → 모든 레일에서 제외)
+    // Hiding a song (long-press to hide → excluded from every rail).
     var blockedIds by mutableStateOf<Set<String>>(emptySet())
         private set
-    var blockCandidate by mutableStateOf<Track?>(null)   // null 아니면 "숨길까요?" 다이얼로그
+    var blockCandidate by mutableStateOf<Track?>(null)   // non-null shows the "hide this?" dialog
         private set
 
-    // 즐겨찾기는 성공(비어있지 않음)하면 캐시, 최근/좋아요는 갱신마다 다시 로드
+    // Favorites are cached once a non-empty load succeeds; recent/liked are reloaded on every refresh.
     private var favSections: List<BrowseSection> = emptyList()
     private var recentSection: BrowseSection? = null
     private var likedSection: BrowseSection? = null
@@ -112,13 +112,13 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
         blockCandidate = null
     }
 
-    /** 홈 진입/복귀 시 호출: 즐겨찾기(비었으면 로드/재시도) + 최근/좋아요 갱신. */
+    /** Called on Home entry/resume: loads/retries favorites (if empty) + refreshes recent/liked. */
     fun loadHome() {
         if (homeLoading) return
         viewModelScope.launch {
             homeLoading = true
             try {
-                // 콜드부팅 직후엔 Wi-Fi 가 아직 안 올라와 검색이 다 실패할 수 있어, 성공할 때까지 재시도.
+                // Right after a cold boot, Wi-Fi may not be up yet and every search can fail, so retry until one succeeds.
                 if (favSections.isEmpty()) {
                     isLoadingHome = homeSections.isEmpty()
                     val favs = FavoritesStore.load(getApplication())
@@ -144,9 +144,9 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 최근 들은/좋아요 레일만 다시 로드 (앱 복귀·좋아요 변경 후). */
+    /** Reloads only the recent/liked rails (after app resume or a like change). */
     private suspend fun refreshDynamic() {
-        // 최근: 로컬 기록 우선(즉시성). 비어있으면 Spotify 서버 기록으로 1회 시드.
+        // Recent: prefer the local history (immediacy). If empty, seed once from Spotify's server history.
         var recent = RecentStore.all(getApplication())
         if (recent.isEmpty()) {
             recent = runCatching { api.recentlyPlayed() }.getOrNull()?.dedupById().orEmpty()
@@ -159,7 +159,7 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun rebuildHome() {
         homeSections = buildList {
-            // 개인화(최근·좋아요)를 위로, 그다음 부모 큐레이션 즐겨찾기
+            // Personalized rails (recent/liked) first, then the parent-curated favorites.
             recentSection?.let(::add)
             likedSection?.let(::add)
             addAll(favSections)
@@ -182,7 +182,7 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 searchResults = api.searchTracks(q)
             } catch (e: Exception) {
-                errorMessage = e.message ?: "검색 중 문제가 생겼어요."
+                errorMessage = e.message ?: "검색 중 문제가 생겼어요."   // user-facing: "Something went wrong while searching."
             } finally {
                 isSearching = false
             }
@@ -190,9 +190,9 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun play(track: Track) {
-        localPlayer.stop()   // 로컬 재생 중지 (Spotify 와 동시 재생 방지)
+        localPlayer.stop()   // stop local playback (avoid playing alongside Spotify)
         isCurrentLiked = LikeStore.isLiked(getApplication(), track.id)
-        // 재생 즉시 최근기록에 올려 홈에 바로 반영
+        // Add to the recent history immediately so Home reflects it right away.
         RecentStore.add(getApplication(), track)
         recentSection = RecentStore.all(getApplication()).takeIf { it.isNotEmpty() }
             ?.let { BrowseSection("최근 들은 노래", it, DeepDive.Recent) }
@@ -200,19 +200,19 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { player.play(track) }
     }
 
-    // --- 로컬 오디오 ---
+    // --- Local audio ---
     fun loadLocal() {
         localTracks = runCatching { LocalAudio.query(getApplication()) }.getOrDefault(emptyList())
     }
 
     fun playLocal(track: LocalTrack) {
-        player.pause()   // Spotify 일시정지 (동시 재생 방지)
+        player.pause()   // pause Spotify (avoid simultaneous playback)
         localPlayer.play(track)
     }
 
     fun toggleLocal() = localPlayer.toggle()
 
-    /** 현재 곡 좋아요 토글(로컬 저장) → "좋아요 한 노래" 레일 즉시 갱신. */
+    /** Toggles the current track's like (stored locally) → refreshes the "liked" rail immediately. */
     fun toggleLike() {
         val track = nowPlaying.value?.track ?: return
         isCurrentLiked = LikeStore.toggle(getApplication(), track)
@@ -221,10 +221,10 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
         rebuildHome()
     }
 
-    /** 앱 복귀 시 갱신 (loadHome 이 즐겨찾기 빈 경우 로드 + 최근/좋아요 갱신 처리). */
+    /** Refresh on app resume (loadHome handles loading favorites if empty + refreshing recent/liked). */
     fun refresh() = loadHome()
 
-    /** 딥다이브 열기: 아티스트는 페이지네이션 검색, 최근은 recently-played 50곡. */
+    /** Opens a deep-dive: artist = paginated search; recent = 50 recently-played tracks. */
     fun openDeepDive(title: String, dive: DeepDive) {
         artistTitle = title
         artistTracks = emptyList()
@@ -243,7 +243,7 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
         artistTracks = emptyList()
     }
 
-    // --- 즐겨찾기 편집 ---
+    // --- Favorites editing ---
     fun openFavEditor() {
         favEditList = FavoritesStore.load(getApplication())
         showFavEditor = true

@@ -108,7 +108,7 @@ import kotlinx.coroutines.delay
 
 @Composable
 fun YompApp(vm: YompViewModel) {
-    // 켤 때마다 "욤프 대문"(인트로) 먼저 → 브라우징으로
+    // Every launch shows the branded intro first → then browsing.
     var showIntro by remember { mutableStateOf(true) }
     if (showIntro) {
         IntroScreen(onDone = { showIntro = false })
@@ -142,7 +142,7 @@ fun YompApp(vm: YompViewModel) {
     }
 }
 
-// MARK: - 욤프 대문 (인트로 스플래시)
+// MARK: - Intro splash
 
 @Composable
 private fun IntroScreen(onDone: () -> Unit) {
@@ -162,7 +162,7 @@ private fun IntroScreen(onDone: () -> Unit) {
         delay(1900)
         onDone()
     }
-    Surface(Modifier.fillMaxSize(), color = Color(0xFF2196F3)) {   // 욤프 브랜드 파랑 (아이콘/스플래시와 통일)
+    Surface(Modifier.fillMaxSize(), color = Color(0xFF2196F3)) {   // Yomp brand blue (matches the icon/splash)
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -178,7 +178,7 @@ private fun IntroScreen(onDone: () -> Unit) {
     }
 }
 
-// MARK: - 로그인
+// MARK: - Login
 
 @Composable
 private fun LoginScreen(vm: YompViewModel, state: AuthState) {
@@ -203,7 +203,7 @@ private fun LoginScreen(vm: YompViewModel, state: AuthState) {
     }
 }
 
-// MARK: - 메인 (홈/찾기 탭 + 재생 바)
+// MARK: - Main (Home/Search tabs + now-playing bar)
 
 @Composable
 private fun MainScreen(vm: YompViewModel) {
@@ -211,16 +211,16 @@ private fun MainScreen(vm: YompViewModel) {
     var showPlayer by remember { mutableStateOf(false) }
     val nowPlaying by vm.nowPlaying.collectAsState()
 
-    // 앱에 들어오거나 복귀할 때마다 갱신 (즐겨찾기 비었으면 재시도 + 최근/좋아요)
+    // Refresh on every entry/resume (retry favorites if empty + refresh recent/liked).
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.loadHome() }
 
-    // 뒤로가기: 전체화면 플레이어/아티스트 화면은 닫고, 홈에선 무시(런처처럼 — 앱 재시작 방지)
+    // Back: close the full-screen player/artist screen; ignore on Home (launcher-like — avoids restarting the app).
     BackHandler(enabled = true) {
         when {
             vm.showFavEditor -> vm.closeFavEditor()
             vm.artistTitle != null -> vm.closeArtist()
             showPlayer -> showPlayer = false
-            else -> { /* 홈에서 뒤로가기 무시 */ }
+            else -> { /* ignore back on Home */ }
         }
     }
 
@@ -277,7 +277,7 @@ private fun MainScreen(vm: YompViewModel) {
     }
 }
 
-// MARK: - 즐겨찾기 편집 (부모)
+// MARK: - Favorites editor (parent)
 
 @Composable
 private fun FavoritesEditorScreen(vm: YompViewModel) {
@@ -333,7 +333,7 @@ private fun FavoritesEditorScreen(vm: YompViewModel) {
     }
 }
 
-// MARK: - 아티스트 딥다이브
+// MARK: - Artist deep-dive
 
 @Composable
 private fun ArtistScreen(vm: YompViewModel, title: String, onBack: () -> Unit) {
@@ -368,7 +368,7 @@ private fun ArtistScreen(vm: YompViewModel, title: String, onBack: () -> Unit) {
     }
 }
 
-// MARK: - 전체화면 플레이어
+// MARK: - Full-screen player
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -419,7 +419,7 @@ private fun FullPlayerScreen(vm: YompViewModel, np: NowPlaying, onClose: () -> U
 
             Spacer(Modifier.weight(1f))
 
-            // 재생 진행바 (남은 시간 표시 + 원하는 위치로 이동)
+            // Playback progress bar (shows time + lets you seek).
             val maxV = dur.coerceAtLeast(1L).toFloat()
             val sliderValue = (if (dragging) dragValue else posRaw.toFloat()).coerceIn(0f, maxV)
             Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
@@ -428,14 +428,14 @@ private fun FullPlayerScreen(vm: YompViewModel, np: NowPlaying, onClose: () -> U
                     onValueChange = { dragging = true; dragValue = it },
                     onValueChangeFinished = { vm.seekTo(dragValue.toLong()); dragging = false },
                     valueRange = 0f..maxV,
-                    // 🦆 노란 오리가 냇물 위를 떠가는 진행 표시 (오른쪽 보고 있음)
+                    // 🦆 A yellow duck floats along the stream to show progress (facing right).
                     thumb = { DuckThumb() },
                     track = { sliderState ->
                         SliderDefaults.Track(
                             sliderState = sliderState,
                             colors = SliderDefaults.colors(
-                                activeTrackColor = Color(0xFF4FC3F7),     // 지나온 냇물 (진한 물색)
-                                inactiveTrackColor = Color(0xFFB3E5FC),   // 남은 냇물 (연한 물색)
+                                activeTrackColor = Color(0xFF4FC3F7),     // stream already passed (deeper blue)
+                                inactiveTrackColor = Color(0xFFB3E5FC),   // stream ahead (lighter blue)
                             ),
                         )
                     },
@@ -485,7 +485,7 @@ private fun FullPlayerScreen(vm: YompViewModel, np: NowPlaying, onClose: () -> U
     }
 }
 
-// MARK: - 홈 (브라우징 레일)
+// MARK: - Home (browse rails)
 
 @Composable
 private fun HomeContent(vm: YompViewModel) {
@@ -508,7 +508,7 @@ private fun HomeContent(vm: YompViewModel) {
                     }
                 }
         }
-        // 부모용: 즐겨찾기 편집 진입 (우상단)
+        // Parent entry point: open the favorites editor (top-right).
         IconButton(
             onClick = { vm.openFavEditor() },
             modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
@@ -557,7 +557,7 @@ private fun BrowseRail(
     }
 }
 
-// MARK: - 찾기
+// MARK: - Search
 
 @Composable
 private fun SearchContent(vm: YompViewModel) {
@@ -594,7 +594,7 @@ private fun SearchContent(vm: YompViewModel) {
     }
 }
 
-// MARK: - 공통 타일 (전체가 탭 영역)
+// MARK: - Shared track tile (whole tile is tappable)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -640,7 +640,7 @@ private fun Artwork(url: String?, modifier: Modifier = Modifier) {
     }
 }
 
-// MARK: - 내 음악 (로컬 오디오)
+// MARK: - My Music (local audio)
 
 @Composable
 private fun LocalContent(vm: YompViewModel) {
@@ -737,7 +737,7 @@ private fun CenteredHint(text: String) {
     }
 }
 
-// MARK: - 하단 재생 바
+// MARK: - Now-playing bar
 
 @Composable
 private fun NowPlayingBar(np: NowPlaying, vm: YompViewModel, onOpen: () -> Unit) {
@@ -782,29 +782,29 @@ private fun ControlButton(icon: ImageVector, desc: String, big: Boolean = false,
     }
 }
 
-/** ms → "분:초" (예: 3:07) */
+/** ms → "m:ss" (e.g. 3:07). */
 private fun fmtTime(ms: Long): String {
     val totalSec = (ms / 1000).coerceAtLeast(0)
     return "%d:%02d".format(totalSec / 60, totalSec % 60)
 }
 
-/** 진행바 썸: 냇물 위를 떠가는 노란 오리 (오른쪽을 바라봄) */
+/** Slider thumb: a yellow duck floating along the stream (facing right). */
 @Composable
 private fun DuckThumb() {
-    val body = Color(0xFFFFD21E)   // 노랑
-    val wing = Color(0xFFF3B500)   // 살짝 진한 노랑 (날개)
-    val beak = Color(0xFFFF8A00)   // 주황 부리
+    val body = Color(0xFFFFD21E)   // yellow
+    val wing = Color(0xFFF3B500)   // slightly deeper yellow (wing)
+    val beak = Color(0xFFFF8A00)   // orange beak
     val eye = Color(0xFF3A2A00)
     Canvas(Modifier.size(36.dp)) {
         val w = size.width
         val h = size.height
-        // 몸통
+        // body
         drawOval(body, topLeft = Offset(w * 0.04f, h * 0.44f), size = Size(w * 0.66f, h * 0.40f))
-        // 날개
+        // wing
         drawOval(wing, topLeft = Offset(w * 0.20f, h * 0.52f), size = Size(w * 0.32f, h * 0.20f))
-        // 머리 (오른쪽 위)
+        // head (upper right)
         drawCircle(body, radius = h * 0.23f, center = Offset(w * 0.70f, h * 0.40f))
-        // 부리 (오른쪽 방향 삼각형)
+        // beak (triangle pointing right)
         drawPath(
             Path().apply {
                 moveTo(w * 0.85f, h * 0.34f)
@@ -814,7 +814,7 @@ private fun DuckThumb() {
             },
             beak,
         )
-        // 눈
+        // eye
         drawCircle(eye, radius = h * 0.035f, center = Offset(w * 0.77f, h * 0.34f))
     }
 }

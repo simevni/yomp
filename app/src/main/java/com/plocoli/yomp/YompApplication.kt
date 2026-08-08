@@ -7,8 +7,8 @@ import coil3.SingletonImageLoader
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 
 /**
- * Coil3 는 네트워크 이미지용 페처를 자동 등록하지 않으므로 여기서 명시적으로 붙인다.
- * (앨범 썸네일이 안 뜨던 원인)
+ * Coil3 doesn't auto-register a network fetcher, so we add one explicitly here.
+ * (This was why album thumbnails weren't loading.)
  */
 class YompApplication : Application(), SingletonImageLoader.Factory {
     override fun newImageLoader(context: PlatformContext): ImageLoader =
