@@ -1,0 +1,9 @@
+# Copy this file to `local.properties` and fill in your values.
+# `local.properties` is git-ignored and must NOT be committed.
+
+# Android SDK location (Android Studio usually sets this automatically)
+# sdk.dir=/Users/you/Library/Android/sdk
+
+# Spotify app credentials (see README "Setup")
+SPOTIFY_CLIENT_ID=your_spotify_client_id_here
+SPOTIFY_REDIRECT_URI=yomp://callback
