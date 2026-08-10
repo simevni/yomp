@@ -407,19 +407,39 @@ private fun ParentPanel(vm: YompViewModel, activity: Activity?, isOwner: Boolean
 
         if (showPinChange) {
             var newPin by remember { mutableStateOf("") }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            var confirmPin by remember { mutableStateOf("") }
+            var msg by remember { mutableStateOf<String?>(null) }
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = newPin,
-                    onValueChange = { newPin = it.filter(Char::isDigit).take(8) },
-                    modifier = Modifier.weight(1f),
+                    onValueChange = { newPin = it.filter(Char::isDigit).take(8); msg = null },
+                    modifier = Modifier.fillMaxWidth(),
                     placeholder = { Text("새 PIN (숫자 4자리 이상)") },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                 )
-                Button(onClick = {
-                    if (newPin.length >= 4) { vm.changeParentPin(newPin); newPin = ""; showPinChange = false }
-                }) { Text("저장") }
+                OutlinedTextField(
+                    value = confirmPin,
+                    onValueChange = { confirmPin = it.filter(Char::isDigit).take(8); msg = null },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("새 PIN 다시 입력") },
+                    singleLine = true,
+                    isError = msg != null,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                )
+                msg?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
+                Button(
+                    onClick = {
+                        when {
+                            newPin.length < 4 -> msg = "숫자 4자리 이상 입력하세요"
+                            newPin != confirmPin -> msg = "두 번 입력한 PIN이 서로 달라요"
+                            else -> { vm.changeParentPin(newPin); newPin = ""; confirmPin = ""; showPinChange = false }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("저장", modifier = Modifier.padding(4.dp)) }
             }
         }
     }
