@@ -38,9 +38,10 @@ object KioskManager {
         if (!dpm.isDeviceOwnerApp(context.packageName)) return
         val admin = admin(context)
         dpm.setLockTaskPackages(admin, arrayOf(context.packageName, "com.spotify.music"))
-        // Lock down every Lock Task feature (nothing but Yomp reachable). API 28+.
+        // Block everything (shade, home, recents, notifications, keyguard) EXCEPT the
+        // power long-press menu — otherwise the device can't be powered off while locked. API 28+.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            dpm.setLockTaskFeatures(admin, DevicePolicyManager.LOCK_TASK_FEATURE_NONE)
+            dpm.setLockTaskFeatures(admin, DevicePolicyManager.LOCK_TASK_FEATURE_GLOBAL_ACTIONS)
         }
     }
 
