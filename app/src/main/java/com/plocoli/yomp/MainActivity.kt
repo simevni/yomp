@@ -5,6 +5,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.plocoli.yomp.data.SettingsStore
+import com.plocoli.yomp.kiosk.KioskManager
 import com.plocoli.yomp.ui.YompApp
 import com.plocoli.yomp.ui.theme.YompTheme
 
@@ -17,6 +19,15 @@ class MainActivity : ComponentActivity() {
                 val vm: YompViewModel = viewModel()
                 YompApp(vm)
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Re-enter kiosk on every resume (no-op unless Yomp is Device Owner and kiosk is armed).
+        if (KioskManager.isDeviceOwner(this) && SettingsStore.kioskEnabled(this)) {
+            KioskManager.configureIfOwner(this)
+            KioskManager.enterKiosk(this)
         }
     }
 }

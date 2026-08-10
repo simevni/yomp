@@ -1,6 +1,8 @@
 package com.plocoli.yomp.ui
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.compose.animation.core.Spring
@@ -93,6 +95,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -101,6 +105,8 @@ import com.plocoli.yomp.BrowseSection
 import com.plocoli.yomp.YompViewModel
 import com.plocoli.yomp.auth.AuthState
 import com.plocoli.yomp.data.LocalTrack
+import com.plocoli.yomp.data.SettingsStore
+import com.plocoli.yomp.kiosk.KioskManager
 import com.plocoli.yomp.data.Track
 import com.plocoli.yomp.player.NowPlaying
 import com.plocoli.yomp.player.RepeatMode
@@ -218,6 +224,7 @@ private fun MainScreen(vm: YompViewModel) {
     BackHandler(enabled = true) {
         when {
             vm.showFavEditor -> vm.closeFavEditor()
+            vm.showParent -> vm.closeParent()
             vm.artistTitle != null -> vm.closeArtist()
             showPlayer -> showPlayer = false
             else -> { /* ignore back on Home */ }
@@ -271,8 +278,149 @@ private fun MainScreen(vm: YompViewModel) {
             FullPlayerScreen(vm, np, onClose = { showPlayer = false })
         }
 
+        if (vm.showParent) {
+            ParentScreen(vm)
+        }
+
         if (vm.showFavEditor) {
             FavoritesEditorScreen(vm)
+        }
+    }
+}
+
+// MARK: - Parent panel (PIN-gated)
+
+@Composable
+private fun ParentScreen(vm: YompViewModel) {
+    val context = LocalContext.current
+    val activity = context as? Activity
+    val isOwner = remember { KioskManager.isDeviceOwner(context) }
+
+    Surface(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = { vm.closeParent() }) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "닫기", Modifier.size(30.dp))
+                }
+                Text(if (vm.parentAuthed) "부모 설정" else "부모 확인", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            }
+            if (!vm.parentAuthed) {
+                PinGate(onSubmit = { vm.submitParentPin(it) })
+            } else {
+                ParentPanel(vm, activity, isOwner, context)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PinGate(onSubmit: (String) -> Boolean) {
+    var pin by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf(false) }
+    fun submit() { if (!onSubmit(pin)) { error = true; pin = "" } }
+    Column(
+        Modifier.fillMaxWidth().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Text("부모 PIN을 입력하세요", color = MaterialTheme.colorScheme.outline)
+        OutlinedTextField(
+            value = pin,
+            onValueChange = { pin = it.filter(Char::isDigit).take(8); error = false },
+            singleLine = true,
+            isError = error,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
+            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { submit() }),
+        )
+        if (error) Text("PIN이 올바르지 않아요", color = MaterialTheme.colorScheme.error)
+        Button(onClick = { submit() }) { Text("확인", modifier = Modifier.padding(4.dp)) }
+    }
+}
+
+@Composable
+private fun ParentPanel(vm: YompViewModel, activity: Activity?, isOwner: Boolean, context: Context) {
+    var showPinChange by remember { mutableStateOf(false) }
+    Column(
+        Modifier.fillMaxWidth().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Button(onClick = { vm.openFavEditor() }, modifier = Modifier.fillMaxWidth()) {
+            Text("즐겨찾기 편집", modifier = Modifier.padding(4.dp))
+        }
+
+        if (isOwner && activity != null) {
+            Button(
+                onClick = {
+                    SettingsStore.setKioskEnabled(context, false)
+                    KioskManager.exitKiosk(activity)
+                    vm.closeParent()
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("기기 잠금 해제하고 나가기", modifier = Modifier.padding(4.dp)) }
+
+            Button(
+                onClick = {
+                    SettingsStore.setKioskEnabled(context, true)
+                    KioskManager.configureIfOwner(context)
+                    KioskManager.enterKiosk(activity)
+                    vm.closeParent()
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("지금 다시 잠그기", modifier = Modifier.padding(4.dp)) }
+        } else {
+            Text(
+                "완전 잠금(키오스크)은 아직 설정되지 않았어요. 설정 방법은 DEVELOPMENT.md의 '기기 잠금' 섹션을 참고하세요.",
+                color = MaterialTheme.colorScheme.outline,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+
+        TextButton(onClick = { showPinChange = !showPinChange }) { Text("PIN 변경") }
+
+        if (isOwner && activity != null) {
+            var confirmClear by remember { mutableStateOf(false) }
+            TextButton(onClick = { confirmClear = true }) {
+                Text("키오스크 기능 완전 제거", color = MaterialTheme.colorScheme.error)
+            }
+            if (confirmClear) {
+                AlertDialog(
+                    onDismissRequest = { confirmClear = false },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            SettingsStore.setKioskEnabled(context, false)
+                            KioskManager.exitKiosk(activity)
+                            KioskManager.clearDeviceOwner(context)
+                            confirmClear = false
+                            vm.closeParent()
+                        }) { Text("제거") }
+                    },
+                    dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("취소") } },
+                    title = { Text("키오스크 완전 제거") },
+                    text = { Text("완전 잠금 기능을 끄고 욤프를 일반 앱으로 되돌릴까요? (다시 켜려면 PC에서 재설정 필요)") },
+                )
+            }
+        }
+
+        if (showPinChange) {
+            var newPin by remember { mutableStateOf("") }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = newPin,
+                    onValueChange = { newPin = it.filter(Char::isDigit).take(8) },
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("새 PIN (숫자 4자리 이상)") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                )
+                Button(onClick = {
+                    if (newPin.length >= 4) { vm.changeParentPin(newPin); newPin = ""; showPinChange = false }
+                }) { Text("저장") }
+            }
         }
     }
 }
@@ -508,12 +656,12 @@ private fun HomeContent(vm: YompViewModel) {
                     }
                 }
         }
-        // Parent entry point: open the favorites editor (top-right).
+        // Parent entry point: opens the PIN-gated parent panel (top-right).
         IconButton(
-            onClick = { vm.openFavEditor() },
+            onClick = { vm.openParent() },
             modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
         ) {
-            Icon(Icons.Filled.Edit, "즐겨찾기 편집", tint = MaterialTheme.colorScheme.outline)
+            Icon(Icons.Filled.Edit, "부모 설정", tint = MaterialTheme.colorScheme.outline)
         }
     }
 }

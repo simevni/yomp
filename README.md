@@ -10,6 +10,7 @@ Yomp is a kid-safe music app built for a 6-year-old: it plays audio from Spotify
 
 - 🎵 **Music-only playback** via Spotify App Remote (audio only — no video)
 - 🏠 **Home-app mode** — power on → Yomp, nothing else reachable via home/back
+- 🔒 **True kiosk lock** (optional) — Device Owner + Lock Task blocks the notification shade, settings, and every other app; exit only with a parent PIN (see [DEVELOPMENT.md](DEVELOPMENT.md))
 - ⭐ **Parent-curated favorites** shown as home rails, **editable in-app** (no rebuild)
 - 🔎 Search + **artist deep-dive** (paginated)
 - ❤️ In-app likes and an instantly-updating "recently played" rail (stored locally)

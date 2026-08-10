@@ -14,6 +14,7 @@ import com.plocoli.yomp.data.LikeStore
 import com.plocoli.yomp.data.LocalAudio
 import com.plocoli.yomp.data.LocalTrack
 import com.plocoli.yomp.data.RecentStore
+import com.plocoli.yomp.data.SettingsStore
 import com.plocoli.yomp.data.SpotifyApi
 import com.plocoli.yomp.data.Track
 import com.plocoli.yomp.player.AppRemotePlayer
@@ -76,6 +77,13 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
     var artistTracks by mutableStateOf<List<Track>>(emptyList())
         private set
     var isLoadingArtist by mutableStateOf(false)
+        private set
+
+    // Parent gate: the pencil opens a PIN prompt; a correct PIN reveals the parent panel
+    // (favorites editor, kiosk unlock, PIN change). Keeps a child out of parent settings.
+    var showParent by mutableStateOf(false)
+        private set
+    var parentAuthed by mutableStateOf(false)
         private set
 
     // Favorites editing (a parent adds/removes in-app → applied without a rebuild).
@@ -242,6 +250,19 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
         artistTitle = null
         artistTracks = emptyList()
     }
+
+    // --- Parent gate ---
+    fun openParent() { showParent = true }
+    fun closeParent() { showParent = false; parentAuthed = false }
+
+    /** Returns true if the PIN is correct (and unlocks the parent panel). */
+    fun submitParentPin(pin: String): Boolean {
+        val ok = SettingsStore.checkPin(getApplication(), pin)
+        if (ok) parentAuthed = true
+        return ok
+    }
+
+    fun changeParentPin(newPin: String) = SettingsStore.setPin(getApplication(), newPin)
 
     // --- Favorites editing ---
     fun openFavEditor() {

@@ -104,10 +104,39 @@ adb -s <시리얼> install -r app/build/outputs/apk/debug/app-debug.apk
 - 개발자 옵션: 설정→태블릿 정보→소프트웨어 정보→**빌드번호 7번 탭**.
 - 콜드부팅 직후 Wi-Fi 지연으로 즐겨찾기 검색이 실패할 수 있어 `loadHome` 에 재시도 로직 있음.
 
+## 기기 잠금 (키오스크 / Device Owner)
+
+욤프는 안드로이드 **Lock Task(키오스크) 모드**를 지원한다. 켜면 알림창·빠른설정·설정·데일리보드·다른 앱이 **전부 막히고**, 홈 우상단 연필(부모 설정) → **부모 PIN**으로만 빠져나온다. 이 기능은 앱이 기기의 **Device Owner** 일 때만 켜지고, 아니면 자동으로 비활성(그냥 일반 홈앱처럼 동작).
+
+> 왜 필요? "홈앱 지정"만으로는 잠기지 않는다(알림창을 내려 설정에 들어갈 수 있음). 그리고 홈앱은 "최근 앱"에 안 떠서 일반 화면 고정(App pinning)도 못 건다. 그래서 Device Owner + Lock Task 가 유일한 native 완전 잠금 경로.
+
+### 최초 1회 프로비저닝 (PC에서 adb)
+Device Owner 는 **기기에 계정이 하나도 없을 때만** 설정된다.
+1. 기기에서 **모든 계정 제거**: 설정 → 계정 및 백업 → 계정 관리 → 각 계정 → 제거. (Spotify 로그인은 Spotify 앱 내부 계정이라 영향 없음. Play 스토어 자동 업데이트만 막힘 — 전용 기기엔 무방)
+2. 욤프가 설치된 상태에서 PC에서:
+   ```bash
+   adb shell dpm set-device-owner com.plocoli.yomp/.kiosk.YompDeviceAdminReceiver
+   ```
+   `Success` 나오면 완료. ("already some accounts on the device" 오류 → 1번 계정 제거를 다시 확인)
+3. 욤프를 껐다 켜거나 재부팅 → 자동으로 잠금 모드 진입.
+
+### 동작
+- `MainActivity.onResume` 에서 Device Owner + kiosk armed 상태면 `startLockTask()`.
+- **나가기**: 홈 우상단 연필 → PIN(기본 **`1234`**) → "기기 잠금 해제하고 나가기".
+- **다시 잠그기**: 부모 설정 → "지금 다시 잠그기". 재부팅하면 `BootReceiver` 가 자동 재잠금(kioskEnabled=true 리셋)이라, 부모의 임시 해제는 재시작으로 원복.
+- **PIN 변경**: 부모 설정 → "PIN 변경"(숫자 4자리 이상).
+
+### 되돌리기 (팩토리 리셋 없이)
+- 앱 안: 부모 설정 → **"키오스크 기능 완전 제거"** (`clearDeviceOwnerApp`).
+- adb: `adb shell dpm remove-active-admin com.plocoli.yomp/.kiosk.YompDeviceAdminReceiver`
+
+### 코드
+`kiosk/KioskManager.kt`(lock task 제어), `kiosk/YompDeviceAdminReceiver.kt`, `kiosk/BootReceiver.kt`, `data/SettingsStore.kt`(PIN·arm 상태), `res/xml/device_admin.xml`, 매니페스트의 receiver 등록. Spotify(`com.spotify.music`)도 lock task allowlist 에 포함(App Remote 바인딩용).
+
 ## 알려진 이슈 / 다음에 할 만한 것
 
-- 인앱 편집(연필)에 **PIN 게이트 없음** — 아이가 열 수 있음(초기화로 복구 가능). 부모 잠금 추가 여지.
+- 부모 PIN 기본값 `1234` — 프로비저닝 후 부모 설정에서 바꾸는 걸 권장. 저장은 평문(SharedPreferences)이라 6세 방지 수준.
 - 인트로 "두둥" **사운드 미구현** (res/raw 오디오 넣으면 됨).
-- recents 버튼/알림 shade 로 이탈 가능(홈앱만으론 못 막음) — 완전 잠금 원하면 화면 고정/키오스크.
+- Device Owner 미설정 시엔 완전 잠금이 안 됨(연필은 PIN으로 막히지만 알림창 이탈은 가능) — 완전 잠금은 위 프로비저닝 필요.
 - 임시 디버그 로그(`YompApi`) 제거 여지.
 ```
