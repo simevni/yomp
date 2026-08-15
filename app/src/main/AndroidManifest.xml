@@ -3,6 +3,8 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Watch for the network coming back, to refill the Home rails without a restart. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!-- Read audio files stored on the device (local playback). -->
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />

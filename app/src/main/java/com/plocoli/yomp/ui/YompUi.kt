@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -37,7 +38,10 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
@@ -48,6 +52,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.Lyrics
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -97,6 +102,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -104,6 +110,7 @@ import coil3.compose.AsyncImage
 import com.plocoli.yomp.BrowseSection
 import com.plocoli.yomp.YompViewModel
 import com.plocoli.yomp.auth.AuthState
+import com.plocoli.yomp.data.LocalLyricsSource
 import com.plocoli.yomp.data.LocalTrack
 import com.plocoli.yomp.data.SettingsStore
 import com.plocoli.yomp.kiosk.KioskManager
@@ -226,6 +233,7 @@ private fun MainScreen(vm: YompViewModel) {
             vm.showFavEditor -> vm.closeFavEditor()
             vm.showParent -> vm.closeParent()
             vm.artistTitle != null -> vm.closeArtist()
+            showPlayer && vm.showLyrics -> vm.closeLyrics()   // lyrics view first, then the player itself
             showPlayer -> showPlayer = false
             else -> { /* ignore back on Home */ }
         }
@@ -378,6 +386,15 @@ private fun ParentPanel(vm: YompViewModel, activity: Activity?, isOwner: Boolean
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
+
+        // Lyrics: where to drop hand-made .lrc files, and a way to re-check the database.
+        Text(
+            "가사 파일(.lrc)을 넣는 곳:\n${LocalLyricsSource.folderHint(context)}\n" +
+                "여기 넣은 파일이 인터넷에서 받은 가사보다 우선해요. 파일 이름은 \"가수 - 제목.lrc\" 또는 \"제목.lrc\".",
+            color = MaterialTheme.colorScheme.outline,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        TextButton(onClick = { vm.clearLyricsCache() }) { Text("가사 다시 받기") }
 
         TextButton(onClick = { showPinChange = !showPinChange }) { Text("PIN 변경") }
 
@@ -557,6 +574,15 @@ private fun FullPlayerScreen(vm: YompViewModel, np: NowPlaying, onClose: () -> U
                     Icon(Icons.Filled.KeyboardArrowDown, "닫기", Modifier.size(32.dp))
                 }
                 Spacer(Modifier.weight(1f))
+                // Lyrics toggle — a kid's control, so no parent PIN in front of it.
+                IconButton(onClick = { vm.toggleLyrics() }) {
+                    Icon(
+                        Icons.Filled.Lyrics,
+                        "가사 보기",
+                        Modifier.size(32.dp),
+                        tint = if (vm.showLyrics) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    )
+                }
                 IconButton(onClick = { vm.toggleLike() }) {
                     Icon(
                         if (vm.isCurrentLiked) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
@@ -569,8 +595,13 @@ private fun FullPlayerScreen(vm: YompViewModel, np: NowPlaying, onClose: () -> U
 
             Spacer(Modifier.weight(1f))
 
-            Box(Modifier.size(320.dp).clip(RoundedCornerShape(28.dp))) {
-                Artwork(np.track.thumbnailUrl, Modifier.fillMaxSize())
+            // Same footprint either way, so nothing jumps when the lyrics are toggled.
+            if (vm.showLyrics) {
+                LyricsPane(vm, posRaw, Modifier.fillMaxWidth().height(320.dp))
+            } else {
+                Box(Modifier.size(320.dp).clip(RoundedCornerShape(28.dp))) {
+                    Artwork(np.track.thumbnailUrl, Modifier.fillMaxSize())
+                }
             }
 
             Spacer(Modifier.size(28.dp))
@@ -651,6 +682,75 @@ private fun FullPlayerScreen(vm: YompViewModel, np: NowPlaying, onClose: () -> U
             Spacer(Modifier.weight(1f))
         }
     }
+}
+
+// MARK: - Lyrics
+
+/**
+ * Lyrics for the current track, in place of the artwork.
+ *
+ * With synced (LRC) lyrics this is a karaoke view: the line being sung is large and
+ * highlighted, the rest are dimmed, and the list follows along. [positionMs] comes from the
+ * same interpolated ticker that drives the duck on the progress bar, so it updates smoothly
+ * even though App Remote only reports its position occasionally.
+ */
+@Composable
+private fun LyricsPane(vm: YompViewModel, positionMs: Long, modifier: Modifier = Modifier) {
+    val lyrics = vm.lyrics
+
+    Box(modifier, contentAlignment = Alignment.Center) {
+        when {
+            vm.isLoadingLyrics && lyrics == null -> CircularProgressIndicator()
+
+            lyrics == null -> LyricsHint("이 노래는 가사가 없어요")
+
+            lyrics.instrumental -> LyricsHint("가사가 없는 연주곡이에요 🎵")
+
+            lyrics.isSynced -> {
+                val current = lyrics.indexAt(positionMs)
+                val listState = rememberLazyListState()
+                // Keep the sung line near the top-middle of the pane as the song moves on.
+                LaunchedEffect(current) {
+                    if (current >= 0) listState.animateScrollToItem((current - 1).coerceAtLeast(0))
+                }
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(vertical = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    itemsIndexed(lyrics.lines) { index, line ->
+                        if (line.text.isBlank()) {
+                            Spacer(Modifier.size(8.dp))
+                        } else {
+                            val isCurrent = index == current
+                            Text(
+                                line.text,
+                                Modifier.fillMaxWidth(),
+                                fontSize = if (isCurrent) 24.sp else 18.sp,
+                                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                    }
+                }
+            }
+
+            // No timing information — just show the words.
+            else -> Text(
+                lyrics.plain,
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                fontSize = 18.sp,
+                textAlign = TextAlign.Center,
+            )
+        }
+    }
+}
+
+@Composable
+private fun LyricsHint(text: String) {
+    Text(text, color = MaterialTheme.colorScheme.outline, fontSize = 18.sp, textAlign = TextAlign.Center)
 }
 
 // MARK: - Home (browse rails)

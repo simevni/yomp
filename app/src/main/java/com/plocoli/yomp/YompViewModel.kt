@@ -2,6 +2,10 @@ package com.plocoli.yomp
 
 import android.app.Application
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -13,6 +17,10 @@ import com.plocoli.yomp.data.FavoritesStore
 import com.plocoli.yomp.data.LikeStore
 import com.plocoli.yomp.data.LocalAudio
 import com.plocoli.yomp.data.LocalTrack
+import com.plocoli.yomp.data.Lyrics
+import com.plocoli.yomp.data.LyricsQuery
+import com.plocoli.yomp.data.LyricsRepository
+import com.plocoli.yomp.data.LyricsStore
 import com.plocoli.yomp.data.RecentStore
 import com.plocoli.yomp.data.SettingsStore
 import com.plocoli.yomp.data.SpotifyApi
@@ -20,9 +28,12 @@ import com.plocoli.yomp.data.Track
 import com.plocoli.yomp.player.AppRemotePlayer
 import com.plocoli.yomp.player.LocalPlayer
 import com.plocoli.yomp.player.Player
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /** Kind of deep-dive opened when a rail title is tapped. */
@@ -71,6 +82,34 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
     var isCurrentLiked by mutableStateOf(false)
         private set
 
+    // Lyrics for the current track. A kid's feature (learning to read along), so it sits
+    // outside the parent PIN gate — the child toggles it from the full-screen player.
+    private val lyricsRepo = LyricsRepository(app)
+    var lyrics by mutableStateOf<Lyrics?>(null)
+        private set
+    var isLoadingLyrics by mutableStateOf(false)
+        private set
+    var showLyrics by mutableStateOf(false)
+        private set
+    private var lyricsJob: Job? = null
+
+    private val connectivity = app.getSystemService(ConnectivityManager::class.java)
+
+    /**
+     * Refills the Home rails as soon as the device gets back online.
+     *
+     * The favorites rails come from Spotify search, so a device that is offline at launch
+     * shows only the local rails (recent/liked). [loadHome] retries for a few seconds and
+     * then gives up until something calls it again — and in kiosk mode the app never leaves
+     * the foreground, so ON_RESUME may not fire for hours. Without this, Wi-Fi coming back
+     * would not repair the Home screen on its own. (2026-08-14: exactly what happened.)
+     */
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            viewModelScope.launch { loadHome() }
+        }
+    }
+
     // Artist deep-dive (tap a rail title → several pages of that artist's tracks).
     var artistTitle by mutableStateOf<String?>(null)   // null = closed
         private set
@@ -108,6 +147,20 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
         appRemotePlayer.onError = { msg -> errorMessage = msg }
         blockedIds = BlockStore.all(getApplication())
         AuthManager.init(getApplication())
+
+        // Follow whatever is actually playing — the track also changes on next/previous,
+        // which come back through the App Remote subscription rather than through play().
+        viewModelScope.launch {
+            player.state
+                .map { it?.track }
+                .distinctUntilChanged { a, b -> a?.id == b?.id }
+                .collect { track -> loadLyrics(track) }
+        }
+
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        runCatching { connectivity?.registerNetworkCallback(request, networkCallback) }
     }
 
     fun askBlock(track: Track) { blockCandidate = track }
@@ -229,6 +282,43 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
         rebuildHome()
     }
 
+    // --- Lyrics ---
+
+    /** Loads lyrics for [track] through the fallback chain (local file → cache → LRCLIB). */
+    private fun loadLyrics(track: Track?) {
+        lyricsJob?.cancel()
+        lyrics = null
+        if (track == null) {
+            isLoadingLyrics = false
+            return
+        }
+        lyricsJob = viewModelScope.launch {
+            isLoadingLyrics = true
+            try {
+                lyrics = lyricsRepo.load(
+                    LyricsQuery(
+                        trackId = track.id,
+                        title = track.name,
+                        artist = track.artistName,
+                        album = track.album?.name.orEmpty(),
+                        durationMs = track.durationMs,
+                    )
+                )
+            } finally {
+                isLoadingLyrics = false
+            }
+        }
+    }
+
+    fun toggleLyrics() { showLyrics = !showLyrics }
+    fun closeLyrics() { showLyrics = false }
+
+    /** Parent panel: drop the cache so newly added .lrc files / new LRCLIB entries are picked up. */
+    fun clearLyricsCache() {
+        LyricsStore.clear(getApplication())
+        loadLyrics(nowPlaying.value?.track)
+    }
+
     /** Refresh on app resume (loadHome handles loading favorites if empty + refreshing recent/liked). */
     fun refresh() = loadHome()
 
@@ -308,6 +398,7 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
     fun clearError() { errorMessage = null }
 
     override fun onCleared() {
+        runCatching { connectivity?.unregisterNetworkCallback(networkCallback) }
         player.release()
         localPlayer.stop()
     }

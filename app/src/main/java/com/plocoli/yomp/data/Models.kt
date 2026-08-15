@@ -1,5 +1,6 @@
 package com.plocoli.yomp.data
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 // Spotify Web API search response (only the fields we need; the rest are ignored).
@@ -24,6 +25,8 @@ data class Track(
     val uri: String,
     val artists: List<Artist> = emptyList(),
     val album: Album? = null,
+    /** Track length. Lyrics lookups match on it to pick the right recording. */
+    @SerialName("duration_ms") val durationMs: Long = 0L,
 ) {
     val artistName: String get() = artists.joinToString(", ") { it.name }
     /** Prefer the largest thumbnail; fall back to any available image. */
