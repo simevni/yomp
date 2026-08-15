@@ -14,6 +14,10 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
             SettingsStore.setKioskEnabled(context, true)
+            // Re-assert the policy from the receiver, not only from MainActivity: if the home
+            // binding were ever lost, Yomp would not launch on boot and nothing else would
+            // repair it. This runs on every boot regardless of what the launcher does.
+            KioskManager.configureIfOwner(context)
         }
     }
 }

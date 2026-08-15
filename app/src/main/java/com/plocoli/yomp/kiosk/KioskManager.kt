@@ -4,7 +4,10 @@ import android.app.Activity
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
+import com.plocoli.yomp.MainActivity
 
 /**
  * Drives kiosk (Lock Task) mode.
@@ -43,6 +46,31 @@ object KioskManager {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             dpm.setLockTaskFeatures(admin, DevicePolicyManager.LOCK_TASK_FEATURE_GLOBAL_ACTIONS)
         }
+        setAsPersistentHome(context)
+    }
+
+    /**
+     * Makes Yomp the device's home app *permanently*, as Device Owner.
+     *
+     * `adb shell cmd package set-home-activity` is not enough: that sets an ordinary
+     * preferred activity, which Android **wipes whenever the package is reinstalled or
+     * updated**. When that happens the tablet boots into the stock launcher instead of
+     * Yomp — and because kiosk mode is entered by MainActivity, no Yomp means no lock
+     * either, so the child gets the whole device. (That is exactly what happened after
+     * the 2026-08-10 install.)
+     *
+     * A persistent preferred activity survives reboots and app updates, and cannot be
+     * changed from Settings. Undone by [clearDeviceOwner].
+     */
+    fun setAsPersistentHome(context: Context) {
+        val dpm = dpm(context)
+        if (!dpm.isDeviceOwnerApp(context.packageName)) return
+        val filter = IntentFilter(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_HOME)
+            addCategory(Intent.CATEGORY_DEFAULT)
+        }
+        val home = ComponentName(context.applicationContext, MainActivity::class.java)
+        runCatching { dpm.addPersistentPreferredActivity(admin(context), filter, home) }
     }
 
     /** Enter kiosk mode if permitted. Safe to call repeatedly (no-op once locked). */
@@ -65,6 +93,10 @@ object KioskManager {
     fun clearDeviceOwner(context: Context) {
         val dpm = dpm(context)
         if (dpm.isDeviceOwnerApp(context.packageName)) {
+            // Release the permanent home binding FIRST. Device Owner is the only thing that can
+            // undo it, so dropping ownership while it is still set would strand the tablet on
+            // Yomp as its home app with no way back short of a factory reset.
+            runCatching { dpm.clearPackagePersistentPreferredActivities(admin(context), context.packageName) }
             @Suppress("DEPRECATION")
             runCatching { dpm.clearDeviceOwnerApp(context.packageName) }
         }
