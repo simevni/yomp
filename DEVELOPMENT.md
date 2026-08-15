@@ -69,6 +69,29 @@ com.plocoli.yomp/
 | `yomp_likes` | 인앱 좋아요 |
 | `yomp_recent` | 최근 들은 노래 |
 | `yomp_blocked` | 숨긴 곡 ID |
+| `yomp_lyrics` | 가사 캐시(곡 ID → 가사, 못 찾은 것도 7일간 기억) |
+
+## 가사 (LRCLIB + 직접 만든 .lrc)
+
+전체화면 플레이어 우상단 **가사 아이콘**을 누르면 아트워크 자리에 가사가 뜬다. 싱크(LRC) 가사가 있으면 **부르는 줄이 크게 강조되고 자동으로 따라 스크롤**된다(가라오케). 아이용 기능이라 부모 PIN 게이트 **밖**에 둔다.
+
+**왜 자체 구현인가:** **Spotify 는 가사를 공개 API 로 제공하지 않는다.** Spotify 앱 안의 가사는 Musixmatch 에서 라이선스로 받아 자사 앱에만 넣는 것이고, Web API·App Remote SDK 어디에도 가사 필드가 없다. 개발 모드 403 과 달리 **정식 모드로 승격해도 열리지 않는다.** 비공식 내부 엔드포인트(`spclient…/color-lyrics`)는 약관 위반 + 수시로 깨져서 쓰지 않는다.
+
+**폴백 체인** (`data/LyricsRepository.kt`):
+
+1. **로컬 파일** — `Android/data/com.plocoli.yomp/files/lyrics/` 의 `.lrc`(또는 `.txt`). **항상 먼저 확인하고 캐시하지 않으므로**, 파일을 넣으면 다음 재생부터 즉시 반영되고 인터넷 가사를 덮어쓴다. 파일 이름은 `가수 - 제목.lrc` 또는 `제목.lrc`(대소문자·공백·문장부호 무시).
+2. **캐시** (`LyricsStore`) — 같은 곡을 반복 재생하는 아이 특성상 대부분 여기서 끝난다. 오프라인에서도 뜬다. 못 찾은 것도 캐시하되 7일 뒤 만료(LRCLIB 는 계속 커지므로).
+3. **LRCLIB** (`LrclibSource`) — 무료·API 키 없음·레이트리밋 없음. `/api/get`(duration 이 ±2초 안에서 맞아야 함)을 먼저 시도하고, 404 면 `/api/search` 로 폴백해 길이가 가장 가까운 것을 고른다(싱크 가사 우선).
+
+소스를 추가하려면 `LyricsSource` 를 구현해 `LyricsRepository` 의 `remoteSources` 에 넣기만 하면 된다. UI·ViewModel 은 안 건드려도 된다.
+
+**제목 정규화가 핵심** (`TrackMatch`): Spotify 제목에는 `(feat. …)`, `- From "…"` 같은 꼬리표가 붙는데, 그대로 조회하면 **검색 결과가 0건**이 된다(실측: `Golden (feat. …) - From KPop Demon Hunters` → 0건, `Golden` → 20건). 아티스트도 첫 번째만 쓴다. 단위 테스트는 `app/src/test/.../LyricsTest.kt`.
+
+**커버리지 (2026-08 실측, 검색 상위 20건 중 싱크 가사 보유):** K-pop 걸그룹은 거의 전부(BLACKPINK 20/20, IVE·aespa·NewJeans 19/20, (G)I-DLE·KATSEYE·BABYMONSTER 18/20), 영화·캐릭터는 준수(HUNTR/X 20/20, Encanto·Moana·KPop Demon Hunters 16/20, Kidz Bop 15/20, My Little Pony 10/20, Frozen 9/20), **일본 동요는 거의 없음**(ケロポンズ 1건, エビカニクス 2건, にじ 0건).
+
+일본 동요는 상업 DB(Musixmatch·プチリリ 등)에도 없다 — 차트 음악이 아니라서다. 그래서 **직접 `.lrc` 를 만들어 위 폴더에 넣는 것**이 정답이고, 만든 김에 [LRCLIB 에 업로드](https://lrclibup.boidu.dev/)하면(가입·키 불필요) 다음부터는 앱이 자동으로 받아온다. 단 **LRCLIB 는 등록한 가사의 삭제·교체를 지원하지 않는다**(영구).
+
+부모 설정에 **"가사 다시 받기"**(캐시 비우기)와 위 폴더 경로 안내가 있다.
 
 ## 자주 하는 업데이트 방법
 
@@ -102,7 +125,21 @@ adb -s <시리얼> install -r app/build/outputs/apk/debug/app-debug.apk
 
 - USB 디버깅 토글이 비활성이면 **설정→보안 및 개인정보→자동 차단(Auto Blocker) OFF**.
 - 개발자 옵션: 설정→태블릿 정보→소프트웨어 정보→**빌드번호 7번 탭**.
-- 콜드부팅 직후 Wi-Fi 지연으로 즐겨찾기 검색이 실패할 수 있어 `loadHome` 에 재시도 로직 있음.
+- 콜드부팅 직후 Wi-Fi 지연으로 즐겨찾기 검색이 실패할 수 있어 `loadHome` 에 재시도 로직 있음(1.5초 간격 6회 ≈ 7.5초).
+- **그 재시도가 끝난 뒤 인터넷이 돌아오는 경우**를 위해 `YompViewModel` 이 `ConnectivityManager.NetworkCallback` 을 등록해 **네트워크 복귀 시 `loadHome()` 을 자동 호출**한다(매니페스트 `ACCESS_NETWORK_STATE`). 키오스크에서는 앱이 포그라운드를 안 떠나 `ON_RESUME` 이 몇 시간씩 안 걸릴 수 있어, 이게 없으면 Wi-Fi 가 돌아와도 홈이 계속 반쪽인 채로 남는다.
+
+### 홈 레일이 최근·좋아요 둘만 나올 때 (2026-08-14)
+
+최근·좋아요는 **로컬 저장**이라 오프라인에서도 뜨고, 즐겨찾기 레일은 **Spotify 검색**이라 인터넷이 없으면 전부 사라진다. 이 조합이 보이면 십중팔구 앱이 아니라 **네트워크 문제**다. 실제 사례: 아이가 빠른설정에서 비행기모드를 켜 둠(홈앱 이탈로 알림창이 열려 있던 그 시간에). 진단·복구:
+
+```bash
+adb -s <시리얼> shell dumpsys connectivity | grep 'Active default network'   # none 이면 네트워크 없음
+adb -s <시리얼> shell settings get global airplane_mode_on                    # 1 이면 비행기모드
+adb -s <시리얼> shell cmd connectivity airplane-mode disable
+adb -s <시리얼> shell svc wifi enable
+```
+
+> 키오스크 중에는 빠른설정이 막혀 **태블릿에서 Wi-Fi 를 고칠 수 없다.** 현재는 PC+adb 가 유일한 방법(또는 부모 PIN 으로 잠금 해제 후 복구). 부모 패널에 Wi-Fi 바로가기를 넣는 건 미구현.
 
 ## 기기 잠금 (키오스크 / Device Owner)
 
@@ -119,6 +156,18 @@ Device Owner 는 **기기에 계정이 하나도 없을 때만** 설정된다.
    ```
    `Success` 나오면 완료. ("already some accounts on the device" 오류 → 1번 계정 제거를 다시 확인)
 3. 욤프를 껐다 켜거나 재부팅 → 자동으로 잠금 모드 진입.
+
+### 홈앱 지정은 반드시 "영구 지정"으로 (2026-08-14 사고)
+
+**증상:** 아이가 태블릿을 껐다 켰더니 욤프가 아니라 삼성 One UI Home 이 떴다. 잠금이 통째로 무력화된 상태.
+
+**원인 사슬:** 기본 홈 지정이 삼성 런처로 풀림 → 부팅 시 욤프가 **아예 실행되지 않음** → `MainActivity.onResume` 이 안 도니 `startLockTask()` 도 호출 안 됨 → Device Owner 도 `kioskEnabled=true` 도 멀쩡했는데 잠금이 안 걸림. **홈앱 지정이 잠금 사슬의 첫 고리**라는 점이 핵심이다.
+
+**따라서 `adb shell cmd package set-home-activity` 로만 지정하면 안 된다.** 그건 일반 preferred activity라 언제든 풀릴 수 있다. Device Owner 권한으로 `addPersistentPreferredActivity`(ACTION_MAIN + CATEGORY_HOME/DEFAULT)를 걸어야 **재부팅·앱 재설치·설정 변경으로 안 풀린다**. `KioskManager.setAsPersistentHome()` 이 이걸 하고, `configureIfOwner()` 가 호출하며, `BootReceiver` 도 매 부팅 `configureIfOwner()` 를 부른다(액티비티 실행에 의존하지 않도록).
+
+검증법: `adb shell cmd package set-home-activity <삼성런처>` 가 `Success` 로 떨어져도 `adb shell cmd package resolve-activity -c android.intent.category.HOME -a android.intent.action.MAIN` 이 계속 `com.plocoli.yomp` 를 가리키면 정상.
+
+> ⚠️ `clearDeviceOwner()` 는 소유권을 포기하기 **전에** `clearPackagePersistentPreferredActivities` 를 먼저 부른다. 순서를 바꾸면 키오스크를 제거한 뒤에도 기기가 욤프 홈에 갇히고, Device Owner 가 없어져서 되돌릴 방법이 팩토리 리셋뿐이 된다.
 
 ### 동작
 - `MainActivity.onResume` 에서 Device Owner + kiosk armed 상태면 `startLockTask()`.
