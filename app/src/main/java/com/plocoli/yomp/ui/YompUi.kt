@@ -44,6 +44,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
@@ -89,8 +90,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.graphicsLayer
@@ -112,6 +115,7 @@ import com.plocoli.yomp.YompViewModel
 import com.plocoli.yomp.auth.AuthState
 import com.plocoli.yomp.data.LocalLyricsSource
 import com.plocoli.yomp.data.LocalTrack
+import com.plocoli.yomp.data.batteryStatusFlow
 import com.plocoli.yomp.data.SettingsStore
 import com.plocoli.yomp.kiosk.KioskManager
 import com.plocoli.yomp.data.Track
@@ -776,13 +780,90 @@ private fun HomeContent(vm: YompViewModel) {
                     }
                 }
         }
-        // Parent entry point: opens the PIN-gated parent panel (top-right).
-        IconButton(
-            onClick = { vm.openParent() },
-            modifier = Modifier.align(Alignment.TopEnd).padding(4.dp),
+        Row(
+            Modifier.align(Alignment.TopEnd).padding(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Icon(Icons.Filled.Edit, "부모 설정", tint = MaterialTheme.colorScheme.outline)
+            // Kiosk hides the status bar, so this is the only battery reading on the device.
+            BatteryIndicator()
+            // Parent entry point: opens the PIN-gated parent panel.
+            IconButton(onClick = { vm.openParent() }) {
+                Icon(Icons.Filled.Edit, "부모 설정", tint = MaterialTheme.colorScheme.outline)
+            }
         }
+    }
+}
+
+/**
+ * Battery level, drawn as a little battery + percentage.
+ *
+ * Lock Task mode hides the system status bar, so without this there is no way to tell how
+ * much charge is left — short of unlocking the device with the parent PIN. Colour carries
+ * the meaning for a child who cannot read the number yet: green while charging, orange
+ * when low, red when nearly empty.
+ */
+@Composable
+private fun BatteryIndicator(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val flow = remember(context) { batteryStatusFlow(context) }
+    val status by flow.collectAsState(initial = null)
+    val battery = status ?: return   // nothing to show until the first reading arrives
+
+    val color = when {
+        battery.isCharging -> Color(0xFF43A047)          // charging
+        battery.percent <= 15 -> Color(0xFFE53935)       // almost empty
+        battery.percent <= 30 -> Color(0xFFFB8C00)       // getting low
+        else -> MaterialTheme.colorScheme.outline
+    }
+
+    Row(
+        modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        if (battery.isCharging) {
+            Icon(Icons.Filled.Bolt, "충전 중", Modifier.size(16.dp), tint = color)
+        }
+        Canvas(Modifier.size(width = 30.dp, height = 15.dp)) {
+            val nubWidth = size.width * 0.08f
+            val bodyWidth = size.width - nubWidth
+            val stroke = size.height * 0.12f
+            val radius = CornerRadius(size.height * 0.25f, size.height * 0.25f)
+
+            // Outline
+            drawRoundRect(
+                color = color,
+                topLeft = Offset(stroke / 2, stroke / 2),
+                size = Size(bodyWidth - stroke, size.height - stroke),
+                cornerRadius = radius,
+                style = Stroke(width = stroke),
+            )
+            // Fill, proportional to the charge left
+            val pad = stroke * 2f
+            val fillWidth = (bodyWidth - pad * 2) * (battery.percent / 100f)
+            if (fillWidth > 0f) {
+                drawRoundRect(
+                    color = color,
+                    topLeft = Offset(pad, pad),
+                    size = Size(fillWidth, size.height - pad * 2),
+                    cornerRadius = CornerRadius(stroke, stroke),
+                )
+            }
+            // Positive terminal nub on the right
+            drawRoundRect(
+                color = color,
+                topLeft = Offset(bodyWidth, size.height * 0.32f),
+                size = Size(nubWidth, size.height * 0.36f),
+                cornerRadius = CornerRadius(nubWidth / 2, nubWidth / 2),
+            )
+        }
+        Text(
+            "${battery.percent}%",
+            color = color,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 
