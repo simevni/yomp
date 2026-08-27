@@ -60,6 +60,7 @@ class AppRemotePlayer(private val appContext: Context) : Player {
     var onError: ((String) -> Unit)? = null
 
     private var remote: SpotifyAppRemote? = null
+    private var repeatInitialized = false   // repeat is forced off once, on the first connection
 
     private val params = ConnectionParams.Builder(BuildConfig.SPOTIFY_CLIENT_ID)
         .setRedirectUri(BuildConfig.SPOTIFY_REDIRECT_URI)
@@ -75,6 +76,14 @@ class AppRemotePlayer(private val appContext: Context) : Player {
             override fun onConnected(spotifyAppRemote: SpotifyAppRemote) {
                 remote = spotifyAppRemote
                 subscribe(spotifyAppRemote)
+                // Start every launch un-repeated. Spotify remembers the repeat mode across sessions,
+                // so a repeat switched on days ago would keep looping one song with no visible cause.
+                // The toggle still works — this only sets the starting state, once per launch.
+                if (!repeatInitialized) {
+                    repeatInitialized = true
+                    spotifyAppRemote.playerApi.setRepeat(0)
+                    _repeat.value = RepeatMode.OFF
+                }
                 onReady(spotifyAppRemote)
             }
             override fun onFailure(error: Throwable) {
