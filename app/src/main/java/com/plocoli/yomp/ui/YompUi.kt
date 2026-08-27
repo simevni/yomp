@@ -20,6 +20,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -57,11 +58,14 @@ import androidx.compose.material.icons.filled.Lyrics
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -107,16 +111,19 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.plocoli.yomp.BrowseSection
+import com.plocoli.yomp.DeepDive
 import com.plocoli.yomp.YompViewModel
 import com.plocoli.yomp.auth.AuthState
 import com.plocoli.yomp.data.LocalLyricsSource
 import com.plocoli.yomp.data.LocalTrack
 import com.plocoli.yomp.data.batteryStatusFlow
 import com.plocoli.yomp.data.SettingsStore
+import com.plocoli.yomp.data.TrackMatch
 import com.plocoli.yomp.kiosk.KioskManager
 import com.plocoli.yomp.data.Track
 import com.plocoli.yomp.player.NowPlaying
@@ -150,6 +157,16 @@ fun YompApp(vm: YompViewModel) {
             dismissButton = { TextButton(onClick = { vm.cancelBlock() }) { Text("취소") } },
             title = { Text("이 곡 숨기기") },
             text = { Text("\"${t.name}\"을(를) 목록에서 숨길까요?") },
+        )
+    }
+
+    vm.favRemoveCandidate?.let { title ->
+        AlertDialog(
+            onDismissRequest = { vm.cancelRemoveFavorite() },
+            confirmButton = { TextButton(onClick = { vm.confirmRemoveFavorite() }) { Text("빼기") } },
+            dismissButton = { TextButton(onClick = { vm.cancelRemoveFavorite() }) { Text("취소") } },
+            title = { Text("홈에서 빼기") },
+            text = { Text("\"$title\" 줄을 홈에서 뺄까요? 나중에 다시 넣을 수 있어요.") },
         )
     }
 
@@ -536,6 +553,17 @@ private fun ArtistScreen(vm: YompViewModel, title: String, onBack: () -> Unit) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, "뒤로", Modifier.size(30.dp))
                 }
                 Text(title, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.weight(1f))
+                // Same star as on search results, for the artist as a whole.
+                val starred = vm.isFavorite(title)
+                IconButton(onClick = { vm.toggleFavorite(title) }) {
+                    Icon(
+                        if (starred) Icons.Filled.Star else Icons.Filled.StarBorder,
+                        if (starred) "홈에서 빼기" else "홈에 추가",
+                        Modifier.size(30.dp),
+                        tint = if (starred) Color(0xFFFFC107) else MaterialTheme.colorScheme.outline,
+                    )
+                }
             }
             when {
                 vm.isLoadingArtist ->
@@ -559,132 +587,191 @@ private fun ArtistScreen(vm: YompViewModel, title: String, onBack: () -> Unit) {
 
 // MARK: - Full-screen player
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FullPlayerScreen(vm: YompViewModel, np: NowPlaying, onClose: () -> Unit) {
-    val repeat by vm.repeatMode.collectAsState()
     val posRaw by vm.positionMs.collectAsState()
+
+    Surface(Modifier.fillMaxSize()) {
+        BoxWithConstraints(Modifier.fillMaxSize().padding(24.dp)) {
+            // The tablet gets held both ways. Landscape leaves only ~600dp of height — the portrait
+            // stack (artwork + title + progress + transport + repeat) does not fit and the bottom
+            // controls used to be cut off the screen, repeat button first. So in landscape the
+            // artwork moves beside the controls instead of above them.
+            val landscape = maxWidth > maxHeight
+            val artSize = if (landscape) {
+                (minOf(maxHeight - 72.dp, maxWidth / 2)).coerceIn(160.dp, 320.dp)
+            } else {
+                320.dp
+            }
+
+            Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+                PlayerTopBar(vm, onClose)
+
+                if (landscape) {
+                    Row(
+                        Modifier.fillMaxWidth().weight(1f),
+                        horizontalArrangement = Arrangement.spacedBy(24.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                            PlayerArt(vm, np, posRaw, artSize)
+                        }
+                        Column(
+                            Modifier.weight(1f),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            PlayerTitle(np)
+                            Spacer(Modifier.size(16.dp))
+                            PlayerProgress(vm, posRaw, Modifier.fillMaxWidth())
+                            Spacer(Modifier.size(8.dp))
+                            PlayerTransport(vm, np)
+                            Spacer(Modifier.size(8.dp))
+                            RepeatButton(vm)
+                        }
+                    }
+                } else {
+                    Spacer(Modifier.weight(1f))
+                    PlayerArt(vm, np, posRaw, artSize)
+                    Spacer(Modifier.size(28.dp))
+                    PlayerTitle(np)
+                    Spacer(Modifier.weight(1f))
+                    PlayerProgress(vm, posRaw, Modifier.fillMaxWidth().padding(horizontal = 24.dp))
+                    Spacer(Modifier.size(16.dp))
+                    PlayerTransport(vm, np)
+                    Spacer(Modifier.size(24.dp))
+                    RepeatButton(vm)
+                    Spacer(Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlayerTopBar(vm: YompViewModel, onClose: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = onClose) {
+            Icon(Icons.Filled.KeyboardArrowDown, "닫기", Modifier.size(32.dp))
+        }
+        Spacer(Modifier.weight(1f))
+        // Lyrics toggle — a kid's control, so no parent PIN in front of it.
+        IconButton(onClick = { vm.toggleLyrics() }) {
+            Icon(
+                Icons.Filled.Lyrics,
+                "가사 보기",
+                Modifier.size(32.dp),
+                tint = if (vm.showLyrics) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        IconButton(onClick = { vm.toggleLike() }) {
+            Icon(
+                if (vm.isCurrentLiked) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                "좋아요",
+                Modifier.size(32.dp),
+                tint = if (vm.isCurrentLiked) Color(0xFFE53935) else MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
+}
+
+/** Artwork, or the lyrics in its place — same footprint either way, so nothing jumps on toggle. */
+@Composable
+private fun PlayerArt(vm: YompViewModel, np: NowPlaying, positionMs: Long, size: Dp) {
+    if (vm.showLyrics) {
+        LyricsPane(vm, positionMs, Modifier.width(size).height(size))
+    } else {
+        Box(Modifier.size(size).clip(RoundedCornerShape(28.dp))) {
+            Artwork(np.track.thumbnailUrl, Modifier.fillMaxSize())
+        }
+    }
+}
+
+@Composable
+private fun PlayerTitle(np: NowPlaying) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            np.track.name,
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+        )
+        if (np.track.artistName.isNotEmpty()) {
+            Text(np.track.artistName, fontSize = 18.sp, color = MaterialTheme.colorScheme.outline)
+        }
+    }
+}
+
+/** Playback progress bar (shows time + lets you seek). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PlayerProgress(vm: YompViewModel, positionMs: Long, modifier: Modifier = Modifier) {
     val dur by vm.durationMs.collectAsState()
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(0f) }
 
-    Surface(Modifier.fillMaxSize()) {
-        Column(
-            Modifier.fillMaxSize().padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onClose) {
-                    Icon(Icons.Filled.KeyboardArrowDown, "닫기", Modifier.size(32.dp))
-                }
-                Spacer(Modifier.weight(1f))
-                // Lyrics toggle — a kid's control, so no parent PIN in front of it.
-                IconButton(onClick = { vm.toggleLyrics() }) {
-                    Icon(
-                        Icons.Filled.Lyrics,
-                        "가사 보기",
-                        Modifier.size(32.dp),
-                        tint = if (vm.showLyrics) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                    )
-                }
-                IconButton(onClick = { vm.toggleLike() }) {
-                    Icon(
-                        if (vm.isCurrentLiked) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                        "좋아요",
-                        Modifier.size(32.dp),
-                        tint = if (vm.isCurrentLiked) Color(0xFFE53935) else MaterialTheme.colorScheme.onSurface,
-                    )
-                }
-            }
-
-            Spacer(Modifier.weight(1f))
-
-            // Same footprint either way, so nothing jumps when the lyrics are toggled.
-            if (vm.showLyrics) {
-                LyricsPane(vm, posRaw, Modifier.fillMaxWidth().height(320.dp))
-            } else {
-                Box(Modifier.size(320.dp).clip(RoundedCornerShape(28.dp))) {
-                    Artwork(np.track.thumbnailUrl, Modifier.fillMaxSize())
-                }
-            }
-
-            Spacer(Modifier.size(28.dp))
-            Text(
-                np.track.name,
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (np.track.artistName.isNotEmpty()) {
-                Text(np.track.artistName, fontSize = 18.sp, color = MaterialTheme.colorScheme.outline)
-            }
-
-            Spacer(Modifier.weight(1f))
-
-            // Playback progress bar (shows time + lets you seek).
-            val maxV = dur.coerceAtLeast(1L).toFloat()
-            val sliderValue = (if (dragging) dragValue else posRaw.toFloat()).coerceIn(0f, maxV)
-            Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-                Slider(
-                    value = sliderValue,
-                    onValueChange = { dragging = true; dragValue = it },
-                    onValueChangeFinished = { vm.seekTo(dragValue.toLong()); dragging = false },
-                    valueRange = 0f..maxV,
-                    // 🦆 A yellow duck floats along the stream to show progress (facing right).
-                    thumb = { DuckThumb() },
-                    track = { sliderState ->
-                        SliderDefaults.Track(
-                            sliderState = sliderState,
-                            colors = SliderDefaults.colors(
-                                activeTrackColor = Color(0xFF4FC3F7),     // stream already passed (deeper blue)
-                                inactiveTrackColor = Color(0xFFB3E5FC),   // stream ahead (lighter blue)
-                            ),
-                        )
-                    },
+    val maxV = dur.coerceAtLeast(1L).toFloat()
+    val sliderValue = (if (dragging) dragValue else positionMs.toFloat()).coerceIn(0f, maxV)
+    Column(modifier) {
+        Slider(
+            value = sliderValue,
+            onValueChange = { dragging = true; dragValue = it },
+            onValueChangeFinished = { vm.seekTo(dragValue.toLong()); dragging = false },
+            valueRange = 0f..maxV,
+            // 🦆 A yellow duck floats along the stream to show progress (facing right).
+            thumb = { DuckThumb() },
+            track = { sliderState ->
+                SliderDefaults.Track(
+                    sliderState = sliderState,
+                    colors = SliderDefaults.colors(
+                        activeTrackColor = Color(0xFF4FC3F7),     // stream already passed (deeper blue)
+                        inactiveTrackColor = Color(0xFFB3E5FC),   // stream ahead (lighter blue)
+                    ),
                 )
-                Row(Modifier.fillMaxWidth()) {
-                    Text(fmtTime(sliderValue.toLong()), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.outline)
-                    Spacer(Modifier.weight(1f))
-                    Text(fmtTime(dur), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.outline)
-                }
-            }
-
-            Spacer(Modifier.size(16.dp))
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(40.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton(onClick = { vm.previous() }, modifier = Modifier.size(64.dp)) {
-                    Icon(Icons.Filled.SkipPrevious, "이전", Modifier.size(44.dp), tint = MaterialTheme.colorScheme.primary)
-                }
-                IconButton(onClick = { vm.toggle() }, modifier = Modifier.size(96.dp)) {
-                    Icon(
-                        if (np.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                        "재생/일시정지",
-                        Modifier.size(80.dp),
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                }
-                IconButton(onClick = { vm.next() }, modifier = Modifier.size(64.dp)) {
-                    Icon(Icons.Filled.SkipNext, "다음", Modifier.size(44.dp), tint = MaterialTheme.colorScheme.primary)
-                }
-            }
-
-            Spacer(Modifier.size(24.dp))
-
-            IconButton(onClick = { vm.cycleRepeat() }, modifier = Modifier.size(56.dp)) {
-                Icon(
-                    if (repeat == RepeatMode.ONE) Icons.Filled.RepeatOne else Icons.Filled.Repeat,
-                    "반복 재생",
-                    Modifier.size(30.dp),
-                    tint = if (repeat == RepeatMode.OFF) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.primary,
-                )
-            }
-
+            },
+        )
+        Row(Modifier.fillMaxWidth()) {
+            Text(fmtTime(sliderValue.toLong()), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.outline)
             Spacer(Modifier.weight(1f))
+            Text(fmtTime(dur), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.outline)
         }
+    }
+}
+
+@Composable
+private fun PlayerTransport(vm: YompViewModel, np: NowPlaying) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(40.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconButton(onClick = { vm.previous() }, modifier = Modifier.size(64.dp)) {
+            Icon(Icons.Filled.SkipPrevious, "이전", Modifier.size(44.dp), tint = MaterialTheme.colorScheme.primary)
+        }
+        IconButton(onClick = { vm.toggle() }, modifier = Modifier.size(96.dp)) {
+            Icon(
+                if (np.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                "재생/일시정지",
+                Modifier.size(80.dp),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+        IconButton(onClick = { vm.next() }, modifier = Modifier.size(64.dp)) {
+            Icon(Icons.Filled.SkipNext, "다음", Modifier.size(44.dp), tint = MaterialTheme.colorScheme.primary)
+        }
+    }
+}
+
+@Composable
+private fun RepeatButton(vm: YompViewModel) {
+    val repeat by vm.repeatMode.collectAsState()
+    IconButton(onClick = { vm.cycleRepeat() }, modifier = Modifier.size(56.dp)) {
+        Icon(
+            if (repeat == RepeatMode.ONE) Icons.Filled.RepeatOne else Icons.Filled.Repeat,
+            "반복 재생",
+            Modifier.size(30.dp),
+            tint = if (repeat == RepeatMode.OFF) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.primary,
+        )
     }
 }
 
@@ -776,6 +863,13 @@ private fun HomeContent(vm: YompViewModel) {
                             onOpenArtist = section.deepDive?.let { dd -> { vm.openDeepDive(section.title, dd) } },
                             blocked = vm.blockedIds,
                             onLongPress = { vm.askBlock(it) },
+                            // Only favorites rails can be removed; "recently played" and
+                            // "liked" are generated, not curated.
+                            onRemoveRail = if (section.deepDive is DeepDive.Artist) {
+                                { vm.askRemoveFavorite(section.title) }
+                            } else {
+                                null
+                            },
                         )
                     }
                 }
@@ -787,6 +881,16 @@ private fun HomeContent(vm: YompViewModel) {
         ) {
             // Kiosk hides the status bar, so this is the only battery reading on the device.
             BatteryIndicator()
+            // Rebuild the rails on demand. The favorites rails come from Spotify search, so a
+            // network hiccup empties them until something triggers another load — in kiosk mode
+            // that may never happen on its own. No PIN: refreshing can only help.
+            IconButton(onClick = { vm.refreshNow() }, enabled = !vm.isLoadingHome) {
+                if (vm.isLoadingHome) {
+                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Filled.Refresh, "새로고침", tint = MaterialTheme.colorScheme.outline)
+                }
+            }
             // Parent entry point: opens the PIN-gated parent panel.
             IconButton(onClick = { vm.openParent() }) {
                 Icon(Icons.Filled.Edit, "부모 설정", tint = MaterialTheme.colorScheme.outline)
@@ -867,6 +971,7 @@ private fun BatteryIndicator(modifier: Modifier = Modifier) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun BrowseRail(
     section: BrowseSection,
@@ -874,6 +979,7 @@ private fun BrowseRail(
     onOpenArtist: (() -> Unit)?,
     blocked: Set<String>,
     onLongPress: (Track) -> Unit,
+    onRemoveRail: (() -> Unit)? = null,
 ) {
     val tracks = section.tracks.filter { it.id !in blocked }
     if (tracks.isEmpty()) return
@@ -881,7 +987,17 @@ private fun BrowseRail(
         Row(
             Modifier
                 .fillMaxWidth()
-                .then(if (onOpenArtist != null) Modifier.clickable { onOpenArtist() } else Modifier)
+                // Tap the title to open the artist, long-press it to take the rail off Home.
+                .then(
+                    if (onOpenArtist != null || onRemoveRail != null) {
+                        Modifier.combinedClickable(
+                            onClick = { onOpenArtist?.invoke() },
+                            onLongClick = onRemoveRail,
+                        )
+                    } else {
+                        Modifier
+                    }
+                )
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -936,7 +1052,15 @@ private fun SearchContent(vm: YompViewModel) {
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 items(vm.searchResults.filter { it.id !in vm.blockedIds }, key = { it.id }) { track ->
-                    TrackTile(track, { vm.play(it) }, Modifier.fillMaxWidth(), onLongPress = { vm.askBlock(track) })
+                    val artist = TrackMatch.primaryArtist(track.artistName)
+                    TrackTile(
+                        track,
+                        { vm.play(it) },
+                        Modifier.fillMaxWidth(),
+                        onLongPress = { vm.askBlock(track) },
+                        isFavorite = artist.isNotEmpty() && vm.isFavorite(artist),
+                        onToggleFavorite = if (artist.isNotEmpty()) ({ vm.toggleFavorite(artist) }) else null,
+                    )
                 }
             }
         }
@@ -952,6 +1076,8 @@ private fun TrackTile(
     onTap: (Track) -> Unit,
     modifier: Modifier = Modifier,
     onLongPress: (() -> Unit)? = null,
+    isFavorite: Boolean = false,
+    onToggleFavorite: (() -> Unit)? = null,
 ) {
     Column(
         modifier
@@ -961,6 +1087,21 @@ private fun TrackTile(
     ) {
         Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(16.dp))) {
             Artwork(track.thumbnailUrl, Modifier.fillMaxSize())
+            // Star = "put this singer on my Home screen". Sits on the artwork so the child
+            // can add a rail straight from the song they just found.
+            if (onToggleFavorite != null) {
+                IconButton(
+                    onClick = onToggleFavorite,
+                    modifier = Modifier.align(Alignment.TopEnd),
+                ) {
+                    Icon(
+                        if (isFavorite) Icons.Filled.Star else Icons.Filled.StarBorder,
+                        if (isFavorite) "홈에서 빼기" else "홈에 추가",
+                        Modifier.size(30.dp),
+                        tint = if (isFavorite) Color(0xFFFFC107) else Color.White,
+                    )
+                }
+            }
         }
         Spacer(Modifier.size(6.dp))
         Text(track.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)

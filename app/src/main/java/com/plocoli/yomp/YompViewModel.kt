@@ -13,7 +13,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.plocoli.yomp.auth.AuthManager
 import com.plocoli.yomp.data.BlockStore
+import com.plocoli.yomp.data.CachedRail
 import com.plocoli.yomp.data.FavoritesStore
+import com.plocoli.yomp.data.HomeCacheStore
 import com.plocoli.yomp.data.LikeStore
 import com.plocoli.yomp.data.LocalAudio
 import com.plocoli.yomp.data.LocalTrack
@@ -21,6 +23,7 @@ import com.plocoli.yomp.data.Lyrics
 import com.plocoli.yomp.data.LyricsQuery
 import com.plocoli.yomp.data.LyricsRepository
 import com.plocoli.yomp.data.LyricsStore
+import com.plocoli.yomp.data.RateLimitedException
 import com.plocoli.yomp.data.RecentStore
 import com.plocoli.yomp.data.SettingsStore
 import com.plocoli.yomp.data.SpotifyApi
@@ -131,6 +134,15 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
     var favEditList by mutableStateOf<List<Fav>>(emptyList())
         private set
 
+    // The child curates the same list directly — a star on a search result adds that artist
+    // as a Home rail, a long-press on a rail title removes it. No PIN: the Search tab already
+    // reaches all of Spotify, so this gate never controlled *what* could be played, only how
+    // Home was arranged — which is the child's own screen.
+    var favTitles by mutableStateOf<Set<String>>(emptySet())   // lowercase titles, for star state
+        private set
+    var favRemoveCandidate by mutableStateOf<String?>(null)    // non-null shows "remove from Home?"
+        private set
+
     // Hiding a song (long-press to hide → excluded from every rail).
     var blockedIds by mutableStateOf<Set<String>>(emptySet())
         private set
@@ -141,11 +153,12 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
     private var favSections: List<BrowseSection> = emptyList()
     private var recentSection: BrowseSection? = null
     private var likedSection: BrowseSection? = null
-    private var homeLoading = false
+    private var homeJob: Job? = null
 
     init {
         appRemotePlayer.onError = { msg -> errorMessage = msg }
         blockedIds = BlockStore.all(getApplication())
+        refreshFavTitles()
         AuthManager.init(getApplication())
 
         // Follow whatever is actually playing — the track also changes on next/previous,
@@ -173,34 +186,82 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
         blockCandidate = null
     }
 
-    /** Called on Home entry/resume: loads/retries favorites (if empty) + refreshes recent/liked. */
-    fun loadHome() {
-        if (homeLoading) return
-        viewModelScope.launch {
-            homeLoading = true
+    /**
+     * Called on Home entry/resume: loads/retries favorites (if empty) + refreshes recent/liked.
+     *
+     * [force] reloads the favorites even when rails are already showing, and restarts a load that
+     * is still running. The refresh button and every favorites edit use it: without it a load that
+     * is already in flight would swallow the new call and leave Home showing the old (or an empty)
+     * set of rails until something else happened to trigger a reload — which in kiosk mode, where
+     * ON_RESUME rarely fires, could be hours.
+     */
+    fun loadHome(force: Boolean = false) {
+        if (homeJob?.isActive == true) {
+            if (!force) return
+            homeJob?.cancel()
+        }
+        homeJob = viewModelScope.launch {
             try {
-                // Right after a cold boot, Wi-Fi may not be up yet and every search can fail, so retry until one succeeds.
-                if (favSections.isEmpty()) {
-                    isLoadingHome = homeSections.isEmpty()
+                if (force || favSections.isEmpty()) {
+                    // Drives the spinner on the refresh button; HomeContent only shows the
+                    // full-screen spinner while there is nothing on screen yet.
+                    isLoadingHome = true
                     val favs = FavoritesStore.load(getApplication())
+
+                    // Start from the last known rails, so Home is filled in immediately and stays
+                    // filled even if every search fails (offline, or rate limited for minutes).
+                    val rails = HomeCacheStore.load(getApplication())
+                        .associate { it.title to BrowseSection(it.title, it.tracks, DeepDive.Artist(it.query)) }
+                        .toMutableMap()
+                    // Favorites order wins, and a favorite removed meanwhile drops out of the cache too.
+                    fun publish() {
+                        favSections = favs.mapNotNull { rails[it.title] }
+                        rebuildHome()
+                    }
+                    publish()
+
+                    var pending = favs
                     var attempt = 0
-                    while (favSections.isEmpty() && attempt < 6) {
-                        if (attempt > 0) delay(1500)
-                        favSections = coroutineScope {
-                            favs.map { fav ->
-                                fav to async { runCatching { api.searchTracks(fav.query) }.getOrNull().orEmpty() }
-                            }.mapNotNull { (fav, d) ->
-                                d.await().takeIf { it.isNotEmpty() }?.let { BrowseSection(fav.title, it, DeepDive.Artist(fav.query)) }
+                    var rateLimitedFor = 0L   // seconds Spotify asked us to wait, if it did
+                    // Retry only the favorites that came back empty — right after a cold boot Wi-Fi
+                    // may not be up yet, and re-running the whole set would spend quota on rails that
+                    // already loaded. Backing off matters: hammering is what earns a 429 in the first place.
+                    while (pending.isNotEmpty() && attempt < 3) {
+                        if (attempt > 0) delay(3000L * attempt)
+                        val results = coroutineScope {
+                            pending.map { fav ->
+                                fav to async { runCatching { api.searchTracks(fav.query) } }
+                            }.map { (fav, d) -> fav to d.await() }
+                        }
+                        results.forEach { (fav, result) ->
+                            val tracks = result.getOrNull().orEmpty()
+                            if (tracks.isNotEmpty()) {
+                                rails[fav.title] = BrowseSection(fav.title, tracks, DeepDive.Artist(fav.query))
+                            }
+                            (result.exceptionOrNull() as? RateLimitedException)?.let {
+                                rateLimitedFor = maxOf(rateLimitedFor, it.retryAfterSeconds)
                             }
                         }
-                        rebuildHome()
+                        pending = results.filter { it.second.getOrNull().isNullOrEmpty() }.map { it.first }
+                        publish()   // show rails as they arrive, rather than after the last retry
                         attempt++
                     }
+
+                    // A refresh that changes nothing looks broken. Say why — being rate limited can
+                    // last several minutes, and no amount of pressing the button shortens it.
+                    if (force && pending.isNotEmpty() && rateLimitedFor > 0) {
+                        val minutes = ((rateLimitedFor + 59) / 60).coerceAtLeast(1)
+                        errorMessage = "Spotify가 잠시 요청을 막고 있어요. ${minutes}분쯤 뒤에 다시 새로고침해 주세요."
+                    }
+
+                    HomeCacheStore.save(
+                        getApplication(),
+                        favs.mapNotNull { fav -> rails[fav.title]?.let { CachedRail(it.title, fav.query, it.tracks) } },
+                    )
                 }
                 refreshDynamic()
             } finally {
                 isLoadingHome = false
-                homeLoading = false
             }
         }
     }
@@ -322,6 +383,9 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
     /** Refresh on app resume (loadHome handles loading favorites if empty + refreshing recent/liked). */
     fun refresh() = loadHome()
 
+    /** The refresh button on Home: rebuild every rail now, even ones that are already showing. */
+    fun refreshNow() = loadHome(force = true)
+
     /** Opens a deep-dive: artist = paginated search; recent = 50 recently-played tracks. */
     fun openDeepDive(title: String, dive: DeepDive) {
         artistTitle = title
@@ -376,17 +440,46 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
 
     fun resetFavorites() {
         favEditList = FavoritesStore.resetToDefault(getApplication())
+        refreshFavTitles()
         reloadFavorites()
+    }
+
+    // --- Favorites the child manages (star on search results / long-press a rail title) ---
+
+    fun isFavorite(name: String): Boolean = name.trim().lowercase() in favTitles
+
+    /** Adds the artist as a Home rail, or removes it if already there. */
+    fun toggleFavorite(name: String) {
+        val title = name.trim()
+        if (title.isEmpty()) return
+        val list = FavoritesStore.load(getApplication())
+        val existing = list.firstOrNull { it.title.equals(title, ignoreCase = true) }
+        favEditList = if (existing != null) list - existing else list + Fav(title)
+        persistFavorites()
+    }
+
+    // Removing is confirmed first: a long-press is easy to trigger by accident, and a rail
+    // the parent curated should not vanish on one stray touch.
+    fun askRemoveFavorite(title: String) { favRemoveCandidate = title }
+    fun cancelRemoveFavorite() { favRemoveCandidate = null }
+    fun confirmRemoveFavorite() {
+        favRemoveCandidate?.let { toggleFavorite(it) }
+        favRemoveCandidate = null
+    }
+
+    private fun refreshFavTitles() {
+        favTitles = FavoritesStore.load(getApplication()).map { it.title.lowercase() }.toSet()
     }
 
     private fun persistFavorites() {
         FavoritesStore.save(getApplication(), favEditList)
+        refreshFavTitles()
         reloadFavorites()
     }
 
     private fun reloadFavorites() {
         favSections = emptyList()
-        loadHome()
+        loadHome(force = true)
     }
 
     fun toggle() = player.toggle()
