@@ -27,6 +27,8 @@ data class Track(
     val album: Album? = null,
     /** Track length. Lyrics lookups match on it to pick the right recording. */
     @SerialName("duration_ms") val durationMs: Long = 0L,
+    /** Spotify's explicit-lyrics flag. Not a block criterion — only used to hide cover art (see YompViewModel.showsCover). */
+    val explicit: Boolean = false,
 ) {
     val artistName: String get() = artists.joinToString(", ") { it.name }
     /** Prefer the largest thumbnail; fall back to any available image. */
@@ -38,6 +40,8 @@ data class Artist(val name: String)
 
 @Serializable
 data class Album(
+    /** Empty for tracks saved before album IDs were kept (old likes/recents). */
+    val id: String = "",
     val name: String = "",
     val images: List<SpotifyImage> = emptyList(),
 )
@@ -47,4 +51,13 @@ data class SpotifyImage(
     val url: String,
     val width: Int? = null,
     val height: Int? = null,
+)
+
+/** GET /albums/{id}. Its tracks are the simplified kind and carry no album of their own. */
+@Serializable
+data class AlbumDetail(
+    val id: String,
+    val name: String = "",
+    val images: List<SpotifyImage> = emptyList(),
+    val tracks: TrackPage = TrackPage(),
 )

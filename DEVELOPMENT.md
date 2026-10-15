@@ -30,7 +30,8 @@ com.plocoli.yomp/
     FavoritesStore.kt      즐겨찾기 기기 저장(편집용). 없으면 Favorites.items 로 시드
     LikeStore.kt           인앱 좋아요(로컬) 저장
     RecentStore.kt         최근 들은 노래(로컬) — 재생 즉시 prepend
-    BlockStore.kt          숨긴 곡 ID 집합
+    BlockStore.kt          차단 목록 저장 (곡 ID / 앨범 / 가수 / 금지어)
+    ContentFilter.kt       차단 판정 규칙(순수 Kotlin, 단위 테스트) + Spotify 앨범 링크 파싱
   player/
     Player.kt              재생 엔진 인터페이스 + NoopPlayer(무음 스텁, 에뮬용)
     AppRemotePlayer.kt     실제 재생(App Remote). 위치 보간 틱커, seek, 반복
@@ -68,7 +69,7 @@ com.plocoli.yomp/
 | `yomp_favorites` | 즐겨찾기 목록(편집 반영) |
 | `yomp_likes` | 인앱 좋아요 |
 | `yomp_recent` | 최근 들은 노래 |
-| `yomp_blocked` | 숨긴 곡 ID |
+| `yomp_blocked` | 차단 목록: `ids`(곡 ID), `albums`(앨범 ID→이름 JSON), `artists`(가수 이름), `words`(금지어) |
 | `yomp_lyrics` | 가사 캐시(곡 ID → 가사, 못 찾은 것도 7일간 기억) |
 
 ## 가사 (LRCLIB + 직접 만든 .lrc)
@@ -97,7 +98,10 @@ com.plocoli.yomp/
 
 - **즐겨찾기 바꾸기(운영 중)**: 앱 홈 우상단 **연필(✏️)** → 추가/삭제. 재빌드 불필요. 기본값 자체를 바꾸려면 `Favorites.kt` 수정.
   - 검색어 팁: 표시 이름이 흔한 단어·다른 곡과 겹치면 `query` 를 더 구체적으로 지정(예: 제목 "Frozen" → query "Disney Frozen" 처럼 "Disney ○○", 또는 작곡가/대표 아티스트명). 비영어권 노래는 원어 표기를 query 로 넣어야 결과가 정확하고, 키워드가 엉뚱하게 걸리면(무섭거나 커버·연주 위주) 더 구체적인 아티스트명으로 바꾼다.
-- **곡 하나 빼기**: 그 곡 **길게 누르기** → 숨기기 (`BlockStore`).
+- **앨범 즐겨찾기**: 전체화면 플레이어 우상단 **앨범(💿) 버튼**(PIN 없음, 아이용) 또는 부모 설정 → 즐겨찾기 편집에 **Spotify 앨범 링크**(앨범 → 공유 → 링크 복사)를 붙여 넣기. 레일은 `GET /albums/{id}` 로 앨범 전곡을 받는다(개발 모드에서 살아 있음, 2026-10 확인 — 폐지된 건 배치 `GET /albums` 뿐). `Fav.albumId` 가 있으면 앨범 레일, 없으면 검색 레일. 레일 식별은 제목이 아니라 `Fav.key`(앨범명이 가수 즐겨찾기와 겹칠 수 있어서).
+- **곡 하나 빼기**: 그 곡 **길게 누르기** → "이 곡만 숨기기"(PIN 없음).
+- **앨범·가수 통째로 빼기**: 길게 누르기 → "앨범 전체 / 가수 전체 숨기기" → **부모 PIN**. 커버·리믹스·sped up 버전은 전부 별개 곡이라 곡 단위로는 못 따라잡는다.
+- **금지어**: 부모 설정 → 차단 관리. 제목·앨범·가수명에 들어 있으면 숨기고, 그 단어로 검색하면 결과를 아예 안 보여준다. 영어는 단어 단위(+복수형) 매칭(`rock` → `rocks` 차단, `rocket` 통과), 한글·일본어는 부분 문자열.
 - **새 기능 추가**: 상태·로직은 `YompViewModel`, 화면은 `ui/YompUi.kt`, 데이터는 `data/`.
 - **App Remote 재생 제어 손보기**: `player/AppRemotePlayer.kt` (play/pause/next/previous/seek/setRepeat 는 `playerApi`).
 
@@ -181,6 +185,17 @@ Device Owner 는 **기기에 계정이 하나도 없을 때만** 설정된다.
 
 ### 코드
 `kiosk/KioskManager.kt`(lock task 제어), `kiosk/YompDeviceAdminReceiver.kt`, `kiosk/BootReceiver.kt`, `data/SettingsStore.kt`(PIN·arm 상태), `res/xml/device_admin.xml`, 매니페스트의 receiver 등록. Spotify(`com.spotify.music`)도 lock task allowlist 에 포함(App Remote 바인딩용).
+
+## 콘텐츠 차단 방침 (2026-10)
+
+**허용이 기본이고, 부모가 선 넘는 것만 골라 막는다.** explicit 곡을 기본으로 숨기고 허용 목록으로 풀어주는 방식은 일부러 안 했다 — 아이가 좋아하는 곡 중에도 explicit 표시가 많고, 선을 넘는데 explicit 이 아닌 곡도 있다.
+
+explicit 플래그(`Track.explicit`, 검색 응답에 들어옴)는 **표지 가리기에만** 쓴다: explicit 곡은 즐겨찾기 가수·앨범 곡이 아니면 모든 화면(검색/레일/딥다이브/재생바/전체화면)에서 표지 대신 음표 그림이 나온다(`YompViewModel.showsCover`). 곡보다 표지가 먼저 눈에 들어오기 때문.
+
+한계:
+- explicit 은 **곡 단위** 플래그라, explicit 앨범의 클린 버전 곡은 표지에 Parental Advisory 가 박혀 있어도 그대로 보인다. 그런 건 앨범 차단으로.
+- 이번 변경 전에 저장된 최근/좋아요 곡은 `explicit`·앨범 ID 가 없어서(기본값 false/"") 표지 가리기·앨범 차단이 안 먹는다. 가수 차단·금지어는 먹는다. 다시 재생하면 새 데이터로 갱신.
+- 가사 내용은 검사하지 않는다.
 
 ## 알려진 이슈 / 다음에 할 만한 것
 

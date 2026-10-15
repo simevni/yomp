@@ -2,9 +2,15 @@ package com.plocoli.yomp
 
 import kotlinx.serialization.Serializable
 
-/** One home rail. title = what's shown on screen, query = the actual Spotify search term (defaults to title). */
+/**
+ * One home rail. title = what's shown on screen, query = the actual Spotify search term (defaults to title).
+ * If [albumId] is set, the rail is that album's tracks instead of a search.
+ */
 @Serializable
-data class Fav(val title: String, val query: String = title)
+data class Fav(val title: String, val query: String = title, val albumId: String? = null) {
+    /** Identifies the rail. Titles alone can collide: an album may share its name with a favorite singer. */
+    val key: String get() = albumId?.let { "album:$it" } ?: title
+}
 
 /**
  * Starter set of parent-curated "rails" shown on the Home screen.

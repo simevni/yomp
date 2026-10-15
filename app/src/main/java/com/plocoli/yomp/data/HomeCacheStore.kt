@@ -7,7 +7,7 @@ import kotlinx.serialization.json.Json
 
 /** One cached favorites rail: the title shown on Home and the tracks it held. */
 @Serializable
-data class CachedRail(val title: String, val query: String, val tracks: List<Track>)
+data class CachedRail(val title: String, val query: String, val tracks: List<Track>, val albumId: String? = null)
 
 /**
  * Last known contents of the favorites rails (SharedPreferences, JSON).

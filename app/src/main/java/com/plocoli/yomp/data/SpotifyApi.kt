@@ -8,6 +8,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -47,31 +48,52 @@ class SpotifyApi(
 
     // Development-mode apps cap the search limit at 10 (higher → 400 "Invalid limit"). Offset pagination still works.
     suspend fun searchTracks(query: String, limit: Int = 10, offset: Int = 0): List<Track> =
+        limited(query) {
+            val url = "https://api.spotify.com/v1/search".toHttpUrl().newBuilder()
+                .addQueryParameter("q", query)
+                .addQueryParameter("type", "track")
+                .addQueryParameter("limit", limit.toString())
+                .addQueryParameter("offset", offset.toString())
+                .build()
+            json.decodeFromString<SearchResponse>(get(url, "search $query")).tracks?.items ?: emptyList()
+        }
+
+    /**
+     * An album's tracks, for album favorites. GET /albums/{id} survived the 2026-02 development-mode
+     * cuts (only the batch GET /albums went). Its tracks carry no album, so the album is put back on
+     * each — rails, covers, and album blocking all read it from there.
+     */
+    suspend fun albumTracks(albumId: String): List<Track> =
+        limited("album $albumId") {
+            val url = "https://api.spotify.com/v1/albums".toHttpUrl().newBuilder()
+                .addPathSegment(albumId)
+                .build()
+            val detail = json.decodeFromString<AlbumDetail>(get(url, "album $albumId"))
+            val album = Album(id = detail.id, name = detail.name, images = detail.images)
+            detail.tracks.items.map { it.copy(album = album) }
+        }
+
+    /** Queues [call] behind [searchGate] and honours a 429 penalty. Home fires these by the dozen. */
+    private suspend fun <T> limited(label: String, call: suspend () -> T): T =
         searchGate.withPermit {
             val cooldownMs = rateLimitedUntilMs - System.currentTimeMillis()
             if (cooldownMs > 0) throw RateLimitedException(cooldownMs / 1000)
             try {
-                search(query, limit, offset)
+                call()
             } catch (rate: RateLimitedException) {
                 // 429 comes with a Retry-After. Waiting it out beats failing the rail — but only
                 // if the wait is short; a long one means the quota is spent and retrying now would
                 // just deepen the hole.
                 val wait = rate.retryAfterSeconds
                 if (wait !in 1..MAX_RETRY_WAIT_SECONDS) throw rate
-                android.util.Log.w("YompApi", "rate limited, retrying in ${wait}s: $query")
+                android.util.Log.w("YompApi", "rate limited, retrying in ${wait}s: $label")
                 delay(wait * 1000)
-                search(query, limit, offset)
+                call()
             }
         }
 
-    private suspend fun search(query: String, limit: Int, offset: Int): List<Track> = withContext(Dispatchers.IO) {
+    private suspend fun get(url: HttpUrl, label: String): String = withContext(Dispatchers.IO) {
         val token = accessTokenProvider() ?: error("로그인이 필요해요.")   // user-facing: "Please sign in."
-        val url = "https://api.spotify.com/v1/search".toHttpUrl().newBuilder()
-            .addQueryParameter("q", query)
-            .addQueryParameter("type", "track")
-            .addQueryParameter("limit", limit.toString())
-            .addQueryParameter("offset", offset.toString())
-            .build()
         val req = Request.Builder()
             .url(url)
             .header("Authorization", "Bearer $token")
@@ -82,14 +104,14 @@ class SpotifyApi(
             if (resp.code == 429) {
                 val retryAfter = resp.header("Retry-After")?.toLongOrNull() ?: DEFAULT_RETRY_WAIT_SECONDS
                 rateLimitedUntilMs = System.currentTimeMillis() + retryAfter * 1000
-                android.util.Log.e("YompApi", "search rate limited (retry after ${retryAfter}s): $query")
+                android.util.Log.e("YompApi", "rate limited (retry after ${retryAfter}s): $label")
                 throw RateLimitedException(retryAfter)
             }
             if (!resp.isSuccessful) {
-                android.util.Log.e("YompApi", "search failed ${resp.code}: $text")
+                android.util.Log.e("YompApi", "$label failed ${resp.code}: $text")
                 error("검색 실패 (${resp.code})")   // user-facing: "Search failed (code)"
             }
-            json.decodeFromString<SearchResponse>(text).tracks?.items ?: emptyList()
+            text
         }
     }
 

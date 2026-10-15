@@ -14,6 +14,7 @@ import androidx.lifecycle.viewModelScope
 import com.plocoli.yomp.auth.AuthManager
 import com.plocoli.yomp.data.BlockStore
 import com.plocoli.yomp.data.CachedRail
+import com.plocoli.yomp.data.ContentFilter
 import com.plocoli.yomp.data.FavoritesStore
 import com.plocoli.yomp.data.HomeCacheStore
 import com.plocoli.yomp.data.LikeStore
@@ -27,7 +28,9 @@ import com.plocoli.yomp.data.RateLimitedException
 import com.plocoli.yomp.data.RecentStore
 import com.plocoli.yomp.data.SettingsStore
 import com.plocoli.yomp.data.SpotifyApi
+import com.plocoli.yomp.data.SpotifyLinks
 import com.plocoli.yomp.data.Track
+import com.plocoli.yomp.data.TrackMatch
 import com.plocoli.yomp.player.AppRemotePlayer
 import com.plocoli.yomp.player.LocalPlayer
 import com.plocoli.yomp.player.Player
@@ -42,11 +45,26 @@ import kotlinx.coroutines.launch
 /** Kind of deep-dive opened when a rail title is tapped. */
 sealed interface DeepDive {
     data class Artist(val query: String) : DeepDive   // paginated artist search
+    data class Album(val albumId: String) : DeepDive  // every track on the album
     data object Recent : DeepDive                      // more recently-played (up to 50)
 }
 
-/** One horizontal rail on the Home screen. If deepDive != null, tapping the title opens a deep-dive. */
-data class BrowseSection(val title: String, val tracks: List<Track>, val deepDive: DeepDive? = null)
+/** How much a parent blocks from the long-press dialog. Album and singer need the parent PIN. */
+enum class BlockScope { TRACK, ALBUM, ARTIST }
+
+/**
+ * One horizontal rail on the Home screen. If deepDive != null, tapping the title opens a deep-dive.
+ * [fav] is set on favorites rails — the ones that can be taken off Home.
+ */
+data class BrowseSection(
+    val title: String,
+    val tracks: List<Track>,
+    val deepDive: DeepDive? = null,
+    val fav: Fav? = null,
+)
+
+private fun Fav.deepDive(): DeepDive = albumId?.let { DeepDive.Album(it) } ?: DeepDive.Artist(query)
+private fun Fav.section(tracks: List<Track>) = BrowseSection(title, tracks, deepDive(), this)
 
 class YompViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -120,6 +138,8 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var isLoadingArtist by mutableStateOf(false)
         private set
+    var artistDive by mutableStateOf<DeepDive?>(null)   // what the open deep-dive shows (drives its star)
+        private set
 
     // Parent gate: the pencil opens a PIN prompt; a correct PIN reveals the parent panel
     // (favorites editor, kiosk unlock, PIN change). Keeps a child out of parent settings.
@@ -138,15 +158,23 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
     // as a Home rail, a long-press on a rail title removes it. No PIN: the Search tab already
     // reaches all of Spotify, so this gate never controlled *what* could be played, only how
     // Home was arranged — which is the child's own screen.
-    var favTitles by mutableStateOf<Set<String>>(emptySet())   // lowercase titles, for star state
+    var favTitles by mutableStateOf<Set<String>>(emptySet())   // lowercase singer titles, for star state
         private set
-    var favRemoveCandidate by mutableStateOf<String?>(null)    // non-null shows "remove from Home?"
+    var favAlbumIds by mutableStateOf<Set<String>>(emptySet())  // album favorites, for the player's album button
+        private set
+    var favRemoveCandidate by mutableStateOf<Fav?>(null)       // non-null shows "remove from Home?"
         private set
 
-    // Hiding a song (long-press to hide → excluded from every rail).
-    var blockedIds by mutableStateOf<Set<String>>(emptySet())
+    // Blocking (long-press a song → hide it, or with the PIN its whole album/singer; plus blocked
+    // words in the parent panel). Applied to every rail, search, and deep-dive.
+    var contentFilter by mutableStateOf(ContentFilter())
         private set
     var blockCandidate by mutableStateOf<Track?>(null)   // non-null shows the "hide this?" dialog
+        private set
+    var showBlockEditor by mutableStateOf(false)
+        private set
+    /** True when the last search was for a blocked word — the Search tab then shows nothing. */
+    var searchBlocked by mutableStateOf(false)
         private set
 
     // Favorites are cached once a non-empty load succeeds; recent/liked are reloaded on every refresh.
@@ -157,7 +185,7 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         appRemotePlayer.onError = { msg -> errorMessage = msg }
-        blockedIds = BlockStore.all(getApplication())
+        contentFilter = BlockStore.filter(getApplication())
         refreshFavTitles()
         AuthManager.init(getApplication())
 
@@ -178,13 +206,62 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
 
     fun askBlock(track: Track) { blockCandidate = track }
     fun cancelBlock() { blockCandidate = null }
-    fun confirmBlock() {
-        blockCandidate?.let {
-            BlockStore.add(getApplication(), it.id)
-            blockedIds = BlockStore.all(getApplication())
+
+    /**
+     * Blocks the candidate song, its album, or its singer(s). A single song needs no PIN — that is
+     * how it has always worked, and one song is easy to undo. A whole album or singer can take a
+     * favorite rail off Home, so it needs [pin]. Returns false if the PIN is wrong.
+     */
+    fun confirmBlock(scope: BlockScope, pin: String? = null): Boolean {
+        val track = blockCandidate ?: return true
+        if (scope != BlockScope.TRACK && !SettingsStore.checkPin(getApplication(), pin.orEmpty())) return false
+        val ctx = getApplication<Application>()
+        when (scope) {
+            BlockScope.TRACK -> BlockStore.add(ctx, track.id)
+            BlockScope.ALBUM -> track.album?.takeIf { it.id.isNotEmpty() }?.let { BlockStore.addAlbum(ctx, it.id, it.name) }
+            BlockScope.ARTIST -> track.artists.forEach { BlockStore.addArtist(ctx, it.name) }
         }
         blockCandidate = null
+        applyFilter()
+        return true
     }
+
+    private fun applyFilter() {
+        contentFilter = BlockStore.filter(getApplication())
+        // Don't let a song that was just blocked keep playing.
+        nowPlaying.value?.track?.let { if (!contentFilter.allows(it)) player.pause() }
+    }
+
+    // --- Block list (parent panel) ---
+    fun openBlockEditor() { showBlockEditor = true }
+    fun closeBlockEditor() { showBlockEditor = false }
+
+    fun blockedAlbums(): Map<String, String> = BlockStore.albums(getApplication())
+    fun blockedArtists(): List<String> = BlockStore.artists(getApplication()).sortedBy { it.lowercase() }
+    fun blockedTrackCount(): Int = contentFilter.trackIds.size
+
+    fun addBlockedWord(word: String) {
+        word.trim().takeIf { it.isNotEmpty() }?.let { BlockStore.addWord(getApplication(), it) }
+        applyFilter()
+    }
+    fun removeBlockedWord(word: String) { BlockStore.removeWord(getApplication(), word); applyFilter() }
+    fun addBlockedArtist(name: String) {
+        name.trim().takeIf { it.isNotEmpty() }?.let { BlockStore.addArtist(getApplication(), it) }
+        applyFilter()
+    }
+    fun removeBlockedArtist(name: String) { BlockStore.removeArtist(getApplication(), name); applyFilter() }
+    fun removeBlockedAlbum(id: String) { BlockStore.removeAlbum(getApplication(), id); applyFilter() }
+    fun clearBlockedTracks() { BlockStore.clearTracks(getApplication()); applyFilter() }
+
+    /**
+     * Explicit songs keep their cover out of sight unless they are from a singer or album on
+     * Home: covers of explicit songs are what looked wrong at a glance, before anything played.
+     * The song itself still plays — blocking stays the parent's call (see [ContentFilter]).
+     */
+    fun showsCover(track: Track): Boolean =
+        !track.explicit ||
+            isFavorite(TrackMatch.primaryArtist(track.artistName)) ||
+            track.album?.id?.let { it in favAlbumIds } == true
 
     /**
      * Called on Home entry/resume: loads/retries favorites (if empty) + refreshes recent/liked.
@@ -211,11 +288,12 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
                     // Start from the last known rails, so Home is filled in immediately and stays
                     // filled even if every search fails (offline, or rate limited for minutes).
                     val rails = HomeCacheStore.load(getApplication())
-                        .associate { it.title to BrowseSection(it.title, it.tracks, DeepDive.Artist(it.query)) }
+                        .map { Fav(it.title, it.query, it.albumId) to it.tracks }
+                        .associate { (fav, tracks) -> fav.key to fav.section(tracks) }
                         .toMutableMap()
                     // Favorites order wins, and a favorite removed meanwhile drops out of the cache too.
                     fun publish() {
-                        favSections = favs.mapNotNull { rails[it.title] }
+                        favSections = favs.mapNotNull { rails[it.key] }
                         rebuildHome()
                     }
                     publish()
@@ -230,13 +308,15 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
                         if (attempt > 0) delay(3000L * attempt)
                         val results = coroutineScope {
                             pending.map { fav ->
-                                fav to async { runCatching { api.searchTracks(fav.query) } }
+                                fav to async {
+                                    runCatching { fav.albumId?.let { api.albumTracks(it) } ?: api.searchTracks(fav.query) }
+                                }
                             }.map { (fav, d) -> fav to d.await() }
                         }
                         results.forEach { (fav, result) ->
                             val tracks = result.getOrNull().orEmpty()
                             if (tracks.isNotEmpty()) {
-                                rails[fav.title] = BrowseSection(fav.title, tracks, DeepDive.Artist(fav.query))
+                                rails[fav.key] = fav.section(tracks)
                             }
                             (result.exceptionOrNull() as? RateLimitedException)?.let {
                                 rateLimitedFor = maxOf(rateLimitedFor, it.retryAfterSeconds)
@@ -256,7 +336,7 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
 
                     HomeCacheStore.save(
                         getApplication(),
-                        favs.mapNotNull { fav -> rails[fav.title]?.let { CachedRail(it.title, fav.query, it.tracks) } },
+                        favs.mapNotNull { fav -> rails[fav.key]?.let { CachedRail(it.title, fav.query, it.tracks, fav.albumId) } },
                     )
                 }
                 refreshDynamic()
@@ -295,8 +375,14 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
 
     fun search(query: String) {
         val q = query.trim()
+        searchBlocked = false
         if (q.isEmpty()) {
             searchResults = emptyList()
+            return
+        }
+        if (!contentFilter.allowsQuery(q)) {
+            searchResults = emptyList()
+            searchBlocked = true
             return
         }
         viewModelScope.launch {
@@ -389,11 +475,13 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
     /** Opens a deep-dive: artist = paginated search; recent = 50 recently-played tracks. */
     fun openDeepDive(title: String, dive: DeepDive) {
         artistTitle = title
+        artistDive = dive
         artistTracks = emptyList()
         isLoadingArtist = true
         viewModelScope.launch {
             artistTracks = when (dive) {
                 is DeepDive.Artist -> runCatching { api.searchTracksDeep(dive.query, pages = 5) }.getOrDefault(emptyList())
+                is DeepDive.Album -> runCatching { api.albumTracks(dive.albumId) }.getOrDefault(emptyList())
                 DeepDive.Recent -> runCatching { api.recentlyPlayed(limit = 50) }.getOrNull()?.distinctBy { it.id }.orEmpty()
             }
             isLoadingArtist = false
@@ -402,6 +490,7 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
 
     fun closeArtist() {
         artistTitle = null
+        artistDive = null
         artistTracks = emptyList()
     }
 
@@ -425,12 +514,33 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun closeFavEditor() { showFavEditor = false }
 
+    /** Adds a singer/movie search rail — or, if [title] is a Spotify album link, that album. */
     fun addFavorite(title: String, query: String) {
         val t = title.trim()
         val q = query.trim().ifEmpty { t }
         if (t.isEmpty()) return
+        val albumId = SpotifyLinks.albumId(t)
+        if (albumId != null) {
+            addAlbumFromLink(albumId)
+            return
+        }
         favEditList = favEditList + Fav(t, q)
         persistFavorites()
+    }
+
+    private fun addAlbumFromLink(albumId: String) {
+        if (favEditList.any { it.albumId == albumId }) return
+        viewModelScope.launch {
+            // The link carries only the ID; the rail needs the album's name.
+            val name = runCatching { api.albumTracks(albumId) }.getOrNull()
+                ?.firstNotNullOfOrNull { it.album?.name?.takeIf(String::isNotEmpty) }
+            if (name == null) {
+                errorMessage = "앨범을 찾지 못했어요. 링크를 다시 확인해 주세요."
+                return@launch
+            }
+            favEditList = FavoritesStore.load(getApplication()) + Fav(name, name, albumId)
+            persistFavorites()
+        }
     }
 
     fun removeFavorite(index: Int) {
@@ -453,22 +563,38 @@ class YompViewModel(app: Application) : AndroidViewModel(app) {
         val title = name.trim()
         if (title.isEmpty()) return
         val list = FavoritesStore.load(getApplication())
-        val existing = list.firstOrNull { it.title.equals(title, ignoreCase = true) }
+        val existing = list.firstOrNull { it.albumId == null && it.title.equals(title, ignoreCase = true) }
         favEditList = if (existing != null) list - existing else list + Fav(title)
+        persistFavorites()
+    }
+
+    fun isFavoriteAlbum(albumId: String): Boolean = albumId in favAlbumIds
+
+    /** Adds the track's album as a Home rail (the player's album button), or removes it. */
+    fun toggleFavoriteAlbum(album: com.plocoli.yomp.data.Album) {
+        if (album.id.isEmpty()) return
+        val list = FavoritesStore.load(getApplication())
+        val existing = list.firstOrNull { it.albumId == album.id }
+        favEditList = if (existing != null) list - existing else list + Fav(album.name, album.name, album.id)
         persistFavorites()
     }
 
     // Removing is confirmed first: a long-press is easy to trigger by accident, and a rail
     // the parent curated should not vanish on one stray touch.
-    fun askRemoveFavorite(title: String) { favRemoveCandidate = title }
+    fun askRemoveFavorite(fav: Fav) { favRemoveCandidate = fav }
     fun cancelRemoveFavorite() { favRemoveCandidate = null }
     fun confirmRemoveFavorite() {
-        favRemoveCandidate?.let { toggleFavorite(it) }
+        favRemoveCandidate?.let { fav ->
+            favEditList = FavoritesStore.load(getApplication()).filterNot { it.key == fav.key }
+            persistFavorites()
+        }
         favRemoveCandidate = null
     }
 
     private fun refreshFavTitles() {
-        favTitles = FavoritesStore.load(getApplication()).map { it.title.lowercase() }.toSet()
+        val favs = FavoritesStore.load(getApplication())
+        favTitles = favs.filter { it.albumId == null }.map { it.title.lowercase() }.toSet()
+        favAlbumIds = favs.mapNotNull { it.albumId }.toSet()
     }
 
     private fun persistFavorites() {

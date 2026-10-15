@@ -45,6 +45,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
@@ -115,10 +116,12 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import com.plocoli.yomp.BlockScope
 import com.plocoli.yomp.BrowseSection
 import com.plocoli.yomp.DeepDive
 import com.plocoli.yomp.YompViewModel
 import com.plocoli.yomp.auth.AuthState
+import com.plocoli.yomp.data.ContentFilter
 import com.plocoli.yomp.data.LocalLyricsSource
 import com.plocoli.yomp.data.LocalTrack
 import com.plocoli.yomp.data.batteryStatusFlow
@@ -150,17 +153,10 @@ fun YompApp(vm: YompViewModel) {
         )
     }
 
-    vm.blockCandidate?.let { t ->
-        AlertDialog(
-            onDismissRequest = { vm.cancelBlock() },
-            confirmButton = { TextButton(onClick = { vm.confirmBlock() }) { Text("숨기기") } },
-            dismissButton = { TextButton(onClick = { vm.cancelBlock() }) { Text("취소") } },
-            title = { Text("이 곡 숨기기") },
-            text = { Text("\"${t.name}\"을(를) 목록에서 숨길까요?") },
-        )
-    }
+    vm.blockCandidate?.let { t -> BlockDialog(vm, t) }
 
-    vm.favRemoveCandidate?.let { title ->
+    vm.favRemoveCandidate?.let { fav ->
+        val title = fav.title
         AlertDialog(
             onDismissRequest = { vm.cancelRemoveFavorite() },
             confirmButton = { TextButton(onClick = { vm.confirmRemoveFavorite() }) { Text("빼기") } },
@@ -174,6 +170,68 @@ fun YompApp(vm: YompViewModel) {
         AuthState.AUTHENTICATED -> MainScreen(vm)
         else -> LoginScreen(vm, authState)
     }
+}
+
+/**
+ * Long-press on a song: hide just this song (no PIN, as before), or — with the parent PIN — its
+ * whole album or singer. Covers, remixes and "sped up" uploads of a song that crosses the line
+ * are separate tracks, so one song at a time can't keep up; the album/singer options can.
+ */
+@Composable
+private fun BlockDialog(vm: YompViewModel, track: Track) {
+    var scope by remember(track.id) { mutableStateOf<BlockScope?>(null) }
+    var pin by remember(track.id) { mutableStateOf("") }
+    var pinError by remember(track.id) { mutableStateOf(false) }
+    val album = track.album?.takeIf { it.id.isNotEmpty() }
+    val pending = scope
+
+    AlertDialog(
+        onDismissRequest = { vm.cancelBlock() },
+        confirmButton = {
+            if (pending == null) {
+                TextButton(onClick = { vm.confirmBlock(BlockScope.TRACK) }) { Text("이 곡만 숨기기") }
+            } else {
+                TextButton(onClick = {
+                    if (!vm.confirmBlock(pending, pin)) { pinError = true; pin = "" }
+                }) { Text("숨기기") }
+            }
+        },
+        dismissButton = { TextButton(onClick = { vm.cancelBlock() }) { Text("취소") } },
+        title = { Text("숨기기") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (pending == null) {
+                    Text("\"${track.name}\"을(를) 목록에서 숨길까요?")
+                    Text(
+                        "앨범이나 가수를 통째로 숨기려면 부모 PIN이 필요해요.",
+                        color = MaterialTheme.colorScheme.outline,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    if (album != null) {
+                        TextButton(onClick = { scope = BlockScope.ALBUM }) { Text("앨범 전체 숨기기: ${album.name}") }
+                    }
+                    if (track.artistName.isNotEmpty()) {
+                        TextButton(onClick = { scope = BlockScope.ARTIST }) { Text("가수 전체 숨기기: ${track.artistName}") }
+                    }
+                } else {
+                    Text(
+                        if (pending == BlockScope.ALBUM) "앨범 \"${album?.name}\"의 모든 곡을 숨겨요."
+                        else "${track.artistName}의 모든 곡을 숨겨요.",
+                    )
+                    OutlinedTextField(
+                        value = pin,
+                        onValueChange = { pin = it.filter(Char::isDigit).take(8); pinError = false },
+                        singleLine = true,
+                        isError = pinError,
+                        placeholder = { Text("부모 PIN") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                    )
+                    if (pinError) Text("PIN이 올바르지 않아요", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+    )
 }
 
 // MARK: - Intro splash
@@ -252,6 +310,7 @@ private fun MainScreen(vm: YompViewModel) {
     BackHandler(enabled = true) {
         when {
             vm.showFavEditor -> vm.closeFavEditor()
+            vm.showBlockEditor -> vm.closeBlockEditor()
             vm.showParent -> vm.closeParent()
             vm.artistTitle != null -> vm.closeArtist()
             showPlayer && vm.showLyrics -> vm.closeLyrics()   // lyrics view first, then the player itself
@@ -313,6 +372,10 @@ private fun MainScreen(vm: YompViewModel) {
 
         if (vm.showFavEditor) {
             FavoritesEditorScreen(vm)
+        }
+
+        if (vm.showBlockEditor) {
+            BlockEditorScreen(vm)
         }
     }
 }
@@ -379,6 +442,9 @@ private fun ParentPanel(vm: YompViewModel, activity: Activity?, isOwner: Boolean
     ) {
         Button(onClick = { vm.openFavEditor() }, modifier = Modifier.fillMaxWidth()) {
             Text("즐겨찾기 편집", modifier = Modifier.padding(4.dp))
+        }
+        Button(onClick = { vm.openBlockEditor() }, modifier = Modifier.fillMaxWidth()) {
+            Text("차단 관리", modifier = Modifier.padding(4.dp))
         }
 
         if (isOwner && activity != null) {
@@ -500,7 +566,8 @@ private fun FavoritesEditorScreen(vm: YompViewModel) {
                 Text("즐겨찾기 편집", fontSize = 24.sp, fontWeight = FontWeight.Bold)
             }
             Text(
-                "가수·영화 이름을 넣으면 홈에 그 노래 줄이 생겨요.",
+                "가수·영화 이름을 넣으면 홈에 그 노래 줄이 생겨요. " +
+                    "Spotify 앱에서 앨범 → 공유 → 링크 복사한 걸 붙여 넣으면 그 앨범이 한 줄로 생겨요.",
                 color = MaterialTheme.colorScheme.outline,
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(horizontal = 16.dp),
@@ -514,7 +581,7 @@ private fun FavoritesEditorScreen(vm: YompViewModel) {
                     value = newTerm,
                     onValueChange = { newTerm = it },
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("예: TWICE, 뽀로로") },
+                    placeholder = { Text("예: TWICE, 뽀로로, 앨범 링크") },
                     singleLine = true,
                 )
                 Button(onClick = { vm.addFavorite(newTerm, newTerm); newTerm = "" }) { Text("추가") }
@@ -525,6 +592,9 @@ private fun FavoritesEditorScreen(vm: YompViewModel) {
                         Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        if (fav.albumId != null) {
+                            Icon(Icons.Filled.Album, "앨범", Modifier.padding(end = 8.dp), tint = MaterialTheme.colorScheme.outline)
+                        }
                         Text(fav.title, Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
                         IconButton(onClick = { vm.removeFavorite(index) }) {
                             Icon(Icons.Filled.Close, "삭제", tint = MaterialTheme.colorScheme.error)
@@ -537,6 +607,122 @@ private fun FavoritesEditorScreen(vm: YompViewModel) {
             }
         }
     }
+}
+
+// MARK: - Block list (parent)
+
+@Composable
+private fun BlockEditorScreen(vm: YompViewModel) {
+    var newWord by remember { mutableStateOf("") }
+    var newArtist by remember { mutableStateOf("") }
+    // The lists are read from the store; contentFilter changes on every edit and re-reads them.
+    val filter = vm.contentFilter
+    val albums = remember(filter) { vm.blockedAlbums().toList().sortedBy { it.second.lowercase() } }
+    val artists = remember(filter) { vm.blockedArtists() }
+
+    Surface(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = { vm.closeBlockEditor() }) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "닫기", Modifier.size(30.dp))
+                }
+                Text("차단 관리", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            }
+            LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) {
+                item {
+                    BlockSectionHeader(
+                        "금지어",
+                        "곡 제목·앨범·가수 이름에 들어 있으면 숨기고, 이 단어로 검색하면 아무것도 안 나와요. " +
+                            "영어는 단어 전체가 맞을 때만 막혀요(rock → rocks는 막고 rocket은 안 막음).",
+                    )
+                    BlockAddRow(newWord, { newWord = it }, "막을 단어") { vm.addBlockedWord(newWord); newWord = "" }
+                }
+                items(filter.words, key = { "w:$it" }) { word ->
+                    BlockRow(word) { vm.removeBlockedWord(word) }
+                }
+                item {
+                    BlockSectionHeader("가수", "이 가수가 참여한 곡은 전부 숨겨요. 곡을 길게 눌러서도 추가할 수 있어요.")
+                    BlockAddRow(newArtist, { newArtist = it }, "가수 이름") { vm.addBlockedArtist(newArtist); newArtist = "" }
+                }
+                items(artists, key = { "a:$it" }) { name ->
+                    BlockRow(name) { vm.removeBlockedArtist(name) }
+                }
+                item {
+                    BlockSectionHeader("앨범", "곡을 길게 눌러 \"앨범 전체 숨기기\"로 추가해요.")
+                    if (albums.isEmpty()) BlockEmpty()
+                }
+                items(albums, key = { "al:${it.first}" }) { (id, name) ->
+                    BlockRow(name) { vm.removeBlockedAlbum(id) }
+                }
+                item {
+                    BlockSectionHeader("곡", "숨긴 곡 ${vm.blockedTrackCount()}개")
+                    if (vm.blockedTrackCount() > 0) {
+                        // Confirmed first: songs are hidden one at a time, often hundreds of them,
+                        // and there is no way to get the list back once it is cleared.
+                        var confirmClear by remember { mutableStateOf(false) }
+                        TextButton(onClick = { confirmClear = true }) { Text("숨긴 곡 모두 되돌리기") }
+                        if (confirmClear) {
+                            AlertDialog(
+                                onDismissRequest = { confirmClear = false },
+                                confirmButton = {
+                                    TextButton(onClick = { vm.clearBlockedTracks(); confirmClear = false }) {
+                                        Text("되돌리기", color = MaterialTheme.colorScheme.error)
+                                    }
+                                },
+                                dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("취소") } },
+                                title = { Text("숨긴 곡 모두 되돌리기") },
+                                text = { Text("숨긴 곡 ${vm.blockedTrackCount()}개가 전부 다시 보여요. 한 번 되돌리면 목록을 복구할 수 없어요.") },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BlockSectionHeader(title: String, hint: String) {
+    Column(Modifier.padding(top = 20.dp, bottom = 4.dp)) {
+        Text(title, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Text(hint, color = MaterialTheme.colorScheme.outline, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun BlockAddRow(value: String, onChange: (String) -> Unit, placeholder: String, onAdd: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onChange,
+            modifier = Modifier.weight(1f),
+            placeholder = { Text(placeholder) },
+            singleLine = true,
+        )
+        Button(onClick = onAdd, enabled = value.isNotBlank()) { Text("추가") }
+    }
+}
+
+@Composable
+private fun BlockRow(label: String, onRemove: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+        IconButton(onClick = onRemove) {
+            Icon(Icons.Filled.Close, "차단 풀기", tint = MaterialTheme.colorScheme.error)
+        }
+    }
+}
+
+@Composable
+private fun BlockEmpty() {
+    Text("없음", color = MaterialTheme.colorScheme.outline, modifier = Modifier.padding(vertical = 4.dp))
 }
 
 // MARK: - Artist deep-dive
@@ -554,9 +740,16 @@ private fun ArtistScreen(vm: YompViewModel, title: String, onBack: () -> Unit) {
                 }
                 Text(title, fontSize = 26.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.weight(1f))
-                // Same star as on search results, for the artist as a whole.
-                val starred = vm.isFavorite(title)
-                IconButton(onClick = { vm.toggleFavorite(title) }) {
+                // Same star as on search results, for the artist (or album) as a whole.
+                val albumId = (vm.artistDive as? DeepDive.Album)?.albumId
+                val starred = if (albumId != null) vm.isFavoriteAlbum(albumId) else vm.isFavorite(title)
+                IconButton(onClick = {
+                    if (albumId != null) {
+                        vm.artistTracks.firstNotNullOfOrNull { it.album }?.let { vm.toggleFavoriteAlbum(it) }
+                    } else {
+                        vm.toggleFavorite(title)
+                    }
+                }) {
                     Icon(
                         if (starred) Icons.Filled.Star else Icons.Filled.StarBorder,
                         if (starred) "홈에서 빼기" else "홈에 추가",
@@ -576,8 +769,14 @@ private fun ArtistScreen(vm: YompViewModel, title: String, onBack: () -> Unit) {
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
-                    items(vm.artistTracks.filter { it.id !in vm.blockedIds }, key = { it.id }) { track ->
-                        TrackTile(track, { vm.play(it) }, Modifier.fillMaxWidth(), onLongPress = { vm.askBlock(track) })
+                    items(vm.artistTracks.filter(vm.contentFilter::allows), key = { it.id }) { track ->
+                        TrackTile(
+                            track,
+                            { vm.play(it) },
+                            Modifier.fillMaxWidth(),
+                            onLongPress = { vm.askBlock(track) },
+                            showCover = vm.showsCover(track),
+                        )
                     }
                 }
             }
@@ -654,6 +853,18 @@ private fun PlayerTopBar(vm: YompViewModel, onClose: () -> Unit) {
             Icon(Icons.Filled.KeyboardArrowDown, "닫기", Modifier.size(32.dp))
         }
         Spacer(Modifier.weight(1f))
+        // Album → Home rail. Like the star on search results, the child's own control: no PIN.
+        vm.nowPlaying.collectAsState().value?.track?.album?.takeIf { it.id.isNotEmpty() }?.let { album ->
+            val starred = vm.isFavoriteAlbum(album.id)
+            IconButton(onClick = { vm.toggleFavoriteAlbum(album) }) {
+                Icon(
+                    Icons.Filled.Album,
+                    if (starred) "이 앨범 홈에서 빼기" else "이 앨범 홈에 추가",
+                    Modifier.size(32.dp),
+                    tint = if (starred) Color(0xFFFFC107) else MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
         // Lyrics toggle — a kid's control, so no parent PIN in front of it.
         IconButton(onClick = { vm.toggleLyrics() }) {
             Icon(
@@ -681,7 +892,7 @@ private fun PlayerArt(vm: YompViewModel, np: NowPlaying, positionMs: Long, size:
         LyricsPane(vm, positionMs, Modifier.width(size).height(size))
     } else {
         Box(Modifier.size(size).clip(RoundedCornerShape(28.dp))) {
-            Artwork(np.track.thumbnailUrl, Modifier.fillMaxSize())
+            Artwork(np.track.thumbnailUrl.takeIf { vm.showsCover(np.track) }, Modifier.fillMaxSize())
         }
     }
 }
@@ -861,15 +1072,12 @@ private fun HomeContent(vm: YompViewModel) {
                             section = section,
                             onTap = { vm.play(it) },
                             onOpenArtist = section.deepDive?.let { dd -> { vm.openDeepDive(section.title, dd) } },
-                            blocked = vm.blockedIds,
+                            filter = vm.contentFilter,
+                            showsCover = vm::showsCover,
                             onLongPress = { vm.askBlock(it) },
                             // Only favorites rails can be removed; "recently played" and
                             // "liked" are generated, not curated.
-                            onRemoveRail = if (section.deepDive is DeepDive.Artist) {
-                                { vm.askRemoveFavorite(section.title) }
-                            } else {
-                                null
-                            },
+                            onRemoveRail = section.fav?.let { fav -> { vm.askRemoveFavorite(fav) } },
                         )
                     }
                 }
@@ -977,11 +1185,12 @@ private fun BrowseRail(
     section: BrowseSection,
     onTap: (Track) -> Unit,
     onOpenArtist: (() -> Unit)?,
-    blocked: Set<String>,
+    filter: ContentFilter,
+    showsCover: (Track) -> Boolean,
     onLongPress: (Track) -> Unit,
     onRemoveRail: (() -> Unit)? = null,
 ) {
-    val tracks = section.tracks.filter { it.id !in blocked }
+    val tracks = section.tracks.filter(filter::allows)
     if (tracks.isEmpty()) return
     Column(Modifier.padding(bottom = 24.dp)) {
         Row(
@@ -1016,7 +1225,13 @@ private fun BrowseRail(
             horizontalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             items(tracks, key = { it.id }) { track ->
-                TrackTile(track, onTap, Modifier.width(150.dp), onLongPress = { onLongPress(track) })
+                TrackTile(
+                    track,
+                    onTap,
+                    Modifier.width(150.dp),
+                    onLongPress = { onLongPress(track) },
+                    showCover = showsCover(track),
+                )
             }
         }
     }
@@ -1044,6 +1259,8 @@ private fun SearchContent(vm: YompViewModel) {
         )
         when {
             vm.isSearching -> Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator() }
+            // Blocked word: say nothing about why — "try something else" is all the child needs.
+            vm.searchBlocked -> CenteredHint("다른 노래를 찾아봐요")
             vm.searchResults.isEmpty() -> CenteredHint("듣고 싶은 노래를 찾아봐요")
             else -> LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 150.dp),
@@ -1051,7 +1268,7 @@ private fun SearchContent(vm: YompViewModel) {
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                items(vm.searchResults.filter { it.id !in vm.blockedIds }, key = { it.id }) { track ->
+                items(vm.searchResults.filter(vm.contentFilter::allows), key = { it.id }) { track ->
                     val artist = TrackMatch.primaryArtist(track.artistName)
                     TrackTile(
                         track,
@@ -1060,6 +1277,7 @@ private fun SearchContent(vm: YompViewModel) {
                         onLongPress = { vm.askBlock(track) },
                         isFavorite = artist.isNotEmpty() && vm.isFavorite(artist),
                         onToggleFavorite = if (artist.isNotEmpty()) ({ vm.toggleFavorite(artist) }) else null,
+                        showCover = vm.showsCover(track),
                     )
                 }
             }
@@ -1078,6 +1296,8 @@ private fun TrackTile(
     onLongPress: (() -> Unit)? = null,
     isFavorite: Boolean = false,
     onToggleFavorite: (() -> Unit)? = null,
+    /** False puts the plain music-note placeholder where the cover would be. */
+    showCover: Boolean = true,
 ) {
     Column(
         modifier
@@ -1086,7 +1306,7 @@ private fun TrackTile(
             .padding(4.dp)
     ) {
         Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(16.dp))) {
-            Artwork(track.thumbnailUrl, Modifier.fillMaxSize())
+            Artwork(track.thumbnailUrl.takeIf { showCover }, Modifier.fillMaxSize())
             // Star = "put this singer on my Home screen". Sits on the artwork so the child
             // can add a rail straight from the song they just found.
             if (onToggleFavorite != null) {
@@ -1243,7 +1463,7 @@ private fun NowPlayingBar(np: NowPlaying, vm: YompViewModel, onOpen: () -> Unit)
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Box(Modifier.size(52.dp).clip(RoundedCornerShape(10.dp))) {
-                    Artwork(np.track.thumbnailUrl, Modifier.fillMaxSize())
+                    Artwork(np.track.thumbnailUrl.takeIf { vm.showsCover(np.track) }, Modifier.fillMaxSize())
                 }
                 Column(Modifier.weight(1f)) {
                     Text(np.track.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
